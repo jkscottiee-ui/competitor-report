@@ -1,6 +1,6 @@
 """
 매주 월요일, 지정된 경쟁사들의 최근 동향과 인기 상품/리뷰 변화를
-Claude API(웹 페이지 직접 확인)로 조사하고, Slack으로 전송하는 스크립트.
+Claude API(도메인 제한 웹 검색)로 조사하고, Slack으로 전송하는 스크립트.
 
 필요한 환경변수:
 - ANTHROPIC_API_KEY : Anthropic API 키
@@ -53,7 +53,8 @@ def check_env():
         sys.exit(1)
 
 
-def call_claude(prompt: str, max_tokens: int = 700) -> str:
+def call_claude(prompt: str, allowed_domains: list, max_tokens: int = 700) -> str:
+    """도메인 제한 웹 검색(web_search) + 보조로 web_fetch를 함께 사용."""
     response = requests.post(
         ANTHROPIC_API_URL,
         headers={
@@ -67,7 +68,13 @@ def call_claude(prompt: str, max_tokens: int = 700) -> str:
             "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}],
             "tools": [
-                {"type": "web_fetch_20250910", "name": "web_fetch", "max_uses": 5},
+                {
+                    "type": "web_search_20250305",
+                    "name": "web_search",
+                    "max_uses": 4,
+                    "allowed_domains": allowed_domains,
+                },
+                {"type": "web_fetch_20250910", "name": "web_fetch", "max_uses": 3},
             ],
         },
         timeout=120,
@@ -79,11 +86,13 @@ def call_claude(prompt: str, max_tokens: int = 700) -> str:
 
 
 def get_trend_summary(company: str, sources: dict) -> str:
-    """공식 홈페이지를 확인해서 신제품/프로모션 등 동향을 텍스트로 요약."""
+    """공식 홈페이지 관련 검색으로 신제품/프로모션 등 동향을 텍스트로 요약."""
     official = sources["official"]
+    domain = official.split("//")[-1].split("/")[0]
     prompt = f"""
-'{company}'의 공식 홈페이지({official})를 web_fetch로 열어서 확인해줘.
-최근 신제품, 프로모션/할인, 공지사항 등 눈에 띄는 소식을 조사해줘.
+가구 브랜드 '{company}'(공식 홈페이지: {official})에 대해
+{domain} 도메인을 중심으로 웹 검색해서, 최근 신제품, 프로모션/할인, 공지사항 등
+눈에 띄는 소식을 조사해줘. 직접 접속(fetch)이 안 되면 검색 결과만으로 판단해도 돼.
 
 아래 형식을 지켜서 한국어로 간결하게 정리해줘:
 - 불필요한 서론 없이 바로 항목만 작성
@@ -91,7 +100,7 @@ def get_trend_summary(company: str, sources: dict) -> str:
 - 최대 3줄
 """
     try:
-        text = call_claude(prompt, max_tokens=400)
+        text = call_claude(prompt, allowed_domains=[domain], max_tokens=400)
         return text if text else "이번 주 특이 동향 없음"
     except Exception as e:
         print(f"[경고] '{company}' 동향 조사 오류: {e}")
@@ -99,12 +108,13 @@ def get_trend_summary(company: str, sources: dict) -> str:
 
 
 def get_product_data(company: str, sources: dict) -> list:
-    """오늘의집 페이지에서 상품별 가격/리뷰수/평점을 JSON으로 추출."""
+    """오늘의집 관련 검색에서 상품별 가격/리뷰수/평점을 JSON으로 추출."""
     ohouse = sources["ohouse"]
     prompt = f"""
-아래 오늘의집 페이지를 web_fetch로 열어서 확인해줘: {ohouse}
+가구 브랜드 '{company}'의 오늘의집 페이지({ohouse})를 웹 검색으로 조사해줘
+(store.ohou.se, m.ohou.se 도메인 결과를 활용). 직접 접속(fetch)이 되면 그 결과도 활용해줘.
 
-이 페이지에 나열된 상품 중 상위 5~8개의 정보를 정리해줘.
+이 브랜드의 상품 중 확인 가능한 상위 5~8개의 정보를 정리해줘.
 다른 설명 없이, 순수 JSON으로만 응답해 (마크다운 코드블록도 쓰지 마):
 
 {{"products": [{{"name": "상품명", "price": 숫자또는null, "review_count": 숫자또는null, "rating": 숫자또는null}}]}}
@@ -115,7 +125,9 @@ def get_product_data(company: str, sources: dict) -> list:
 - 상품을 하나도 찾을 수 없으면 {{"products": []}}로 응답
 """
     try:
-        text = call_claude(prompt, max_tokens=900)
+        text = call_claude(
+            prompt, allowed_domains=["store.ohou.se", "m.ohou.se"], max_tokens=900
+        )
         cleaned = re.sub(r"^```(json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
         parsed = json.loads(cleaned)
         return parsed.get("products", [])
