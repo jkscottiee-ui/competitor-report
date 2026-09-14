@@ -1,70 +1,8 @@
 {
   "폴인퍼니": {
-    "오늘의집": [
-      {
-        "name": "폴인퍼니 듀이 식탁 의자 플라스틱 카페 디자인의자",
-        "price": 23400,
-        "review_count": 4257,
-        "rating": 4.8
-      },
-      {
-        "name": "폴인퍼니 로이드 4인용 타원 포세린 세라믹 실버 식탁 테이블 1400",
-        "price": 299000,
-        "review_count": 617,
-        "rating": 4.8
-      },
-      {
-        "name": "폴인퍼니 베네치아 6인용 직각 포세린 세라믹 식탁 테이블 1800",
-        "price": 269000,
-        "review_count": 137,
-        "rating": 4.8
-      },
-      {
-        "name": "폴인퍼니 아르카 식탁의자 테이블 의자 편한 디자인",
-        "price": 59900,
-        "review_count": 421,
-        "rating": 4.9
-      },
-      {
-        "name": "폴인퍼니 카모 포세린 세라믹 원목 식탁 테이블 6인용 직각 1800",
-        "price": 553000,
-        "review_count": 6,
-        "rating": 5
-      }
-    ],
+    "오늘의집": [],
     "쿠팡": [],
-    "네이버": [
-      {
-        "name": "듀이 식탁 의자",
-        "price": 23400,
-        "review_count": 5454,
-        "rating": null
-      },
-      {
-        "name": "듀이 식탁 의자 1+1",
-        "price": 46800,
-        "review_count": 1843,
-        "rating": null
-      },
-      {
-        "name": "앨빈 식탁 의자",
-        "price": 49900,
-        "review_count": null,
-        "rating": null
-      },
-      {
-        "name": "누벤 식탁 벤치",
-        "price": 102000,
-        "review_count": null,
-        "rating": null
-      },
-      {
-        "name": "루체 벤치",
-        "price": 154000,
-        "review_count": null,
-        "rating": null
-      }
-    ]
+    "네이버": []
   },
   "영가구": {
     "오늘의집": [],
