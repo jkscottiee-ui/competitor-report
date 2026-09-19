@@ -38,14 +38,35 @@ SNAPSHOT_PATH = "data/last_snapshot.json"
 # 추적할 상품 카테고리 (여기를 수정하면 범위를 바꿀 수 있어요)
 CATEGORY = "식탁, 테이블, 의자"
 
+# 지금 AI(web_fetch/web_search)로 실제 조사가 되는 플랫폼만 여기 넣는다.
+# 쿠팡/네이버는 자동화 접근을 차단하는 보안 정책 때문에 지금 방식으로는 거의 항상
+# 실패해서, 매번 API 비용만 쓰고 결과는 못 얻는다. 나중에 공식 API(쿠팡 파트너스,
+# 네이버 쇼핑 검색 오픈API)로 연동할 때 이 목록에 추가하면 된다. 그 전까지는
+# COMPANY_SOURCES에 쿠팡/네이버 정보를 남겨는 두되(나중에 그대로 재사용), 실제
+# AI 호출은 건너뛰어서 비용을 아낀다.
+ACTIVE_PLATFORMS = {"오늘의집"}
+
 # 각 회사가 입점한 플랫폼 목록 (플랫폼 이름 + 검색에 참고할 스토어 주소)
-# ⚠️ 테스트용 임시 버전: 비용을 아끼기 위해 "영가구" 1곳만 조사하도록 나머지 3곳을 잠시 빼둔 상태입니다.
-# 정상적으로 확인되면 원래의 4개 회사가 모두 들어있는 main.py로 다시 덮어써야 합니다.
 COMPANY_SOURCES = {
+    "폴인퍼니": {
+        "오늘의집": "store.ohou.se/brands/13004",
+        "쿠팡": "shop.coupang.com/fallinfuni",
+        "네이버": "brand.naver.com/fallinfuni",
+    },
     "영가구": {
         "오늘의집": "store.ohou.se/brands/3554",
         "쿠팡": "shop.coupang.com/younggagu",
         "네이버": "brand.naver.com/younggagu",
+    },
+    "에이비퍼니쳐": {
+        "오늘의집": "store.ohou.se/brands/6360",
+        "쿠팡": "shop.coupang.com/abfurniture",
+        "네이버": "brand.naver.com/abfurniture",
+    },
+    "위드퍼니처": {
+        "오늘의집": "store.ohou.se/brands/1061",
+        "쿠팡": "shop.coupang.com/A00061777",
+        "네이버": "smartstore.naver.com/withfurniture",
     },
 }
 
@@ -109,13 +130,16 @@ def get_platform_products(company: str, platform: str, store_hint: str) -> list:
 - 두 페이지 중 하나에서라도 상품 목록/가격/리뷰수/평점/상품 상세 링크/대표 이미지 URL을 확인할 수 있으면 그 값을 사용해.
 - 검색결과 페이지를 볼 때는 '{company}' 브랜드가 맞는 상품만 골라야 해 (다른 브랜드 상품 섞이지 않게 주의).
 - 그래도 정보가 불충분하면 web_search로 보완 조사해.
+- 상품은 찾았는데 그 상품의 url이나 image_url만 비어있다면, 포기하지 말고 "{company} <상품명>" 같은 식으로
+  web_search를 한 번 더 해서 그 상품의 상세 페이지 링크나 대표 이미지를 찾아봐
+  (페이지가 이미지를 자바스크립트로 나중에 불러오는 방식이라 최초 페이지 내용만으로는 안 보일 때가 있음).
 - 그래도 확인이 안 되면 억지로 지어내지 말고 해당 필드는 null로 남겨.
 
 조건:
 - '{CATEGORY}' 및 이와 밀접히 관련된 상품(다이닝 체어, 스툴, 벤치, 다이닝 세트 등)만 포함
 - 반드시 '{platform}' 플랫폼에 올라온 '{company}' 상품이어야 함 (다른 플랫폼/다른 브랜드 제외)
 - 브랜드명은 띄어쓰기나 '처/쳐' 등 표기가 다를 수 있으니 유사 표기도 함께 확인
-- 확인 가능한 상위 3~5개만
+- 확인 가능한 상위 10~15개까지 (많을수록 좋지만, 억지로 지어내지 말고 실제 페이지에서 확인되는 만큼만)
 - image_url은 상품 사진의 실제 이미지 파일 주소(og:image, 썸네일 src 등)를 우선 사용
 
 다른 설명이나 인사말 없이, 순수 JSON 한 개만 응답해 (마크다운 코드블록 표시도 쓰지 마):
@@ -139,7 +163,9 @@ def get_platform_products(company: str, platform: str, store_hint: str) -> list:
                 # 이전 버전은 2000으로 낮게 잡아서, 페이지 내용을 읽고 나면 최종 JSON을
                 # 다 쓰기 전에 토큰이 바닥나 "빈 응답(stop_reason=max_tokens)"이 되는
                 # 경우가 있었다. 출력 여유를 넉넉히 늘렸다.
-                "max_tokens": 4096,
+                # (상위 10~15개까지 뽑도록 늘리면서, 그만큼 JSON 응답도 길어지므로
+                # 한 번 더 여유 있게 올려둔다.)
+                "max_tokens": 6000,
                 "messages": [{"role": "user", "content": prompt}],
                 "tools": [
                     {
@@ -253,8 +279,9 @@ def append_products_to_sheet(worksheet, company: str, by_platform: dict, today: 
     rows = []
     for platform, products in by_platform.items():
         if not products:
+            status = "조사 실패" if platform in ACTIVE_PLATFORMS else "추후 지원 예정(공식 API 연동 전)"
             rows.append([
-                today, platform, company, "(상품 없음)", "", "", "", "조사 실패", "", "", "",
+                today, platform, company, "(상품 없음)", "", "", "", status, "", "", "",
             ])
             continue
         for p in products:
@@ -280,7 +307,12 @@ def build_company_summary_text(company: str, by_platform: dict, changes: list, s
     """Slack에는 회사별 요약(플랫폼별 발견 개수 + 변화 유무)과 시트 링크만 전송한다."""
     lines = [f"*:mag: {company} 주간 판매 동향 요약 - {CATEGORY}*"]
     for platform, products in by_platform.items():
-        lines.append(f"  • {platform}: {len(products)}개 상품 확인" if products else f"  • {platform}: 상품 없음")
+        if products:
+            lines.append(f"  • {platform}: {len(products)}개 상품 확인")
+        elif platform not in ACTIVE_PLATFORMS:
+            lines.append(f"  • {platform}: 아직 미지원 (추후 공식 API 연동 예정)")
+        else:
+            lines.append(f"  • {platform}: 상품 없음")
     if changes:
         lines.append(f"  ⚡ 변화 {len(changes)}건 감지 (신규/가격변동/리뷰증가)")
     else:
@@ -311,6 +343,10 @@ def main():
         print(f"조사 중: {company}")
         by_platform = {}
         for platform, store_hint in platforms.items():
+            if platform not in ACTIVE_PLATFORMS:
+                print(f"  - {platform}: 아직 연동 안 됨 (건너뜀, API 비용 절약)")
+                by_platform[platform] = []
+                continue
             print(f"  - {platform} 확인 중...")
             by_platform[platform] = get_platform_products(company, platform, store_hint)
 
