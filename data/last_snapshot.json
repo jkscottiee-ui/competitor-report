@@ -1,6 +1,27 @@
 {
   "영가구": {
-    "오늘의집": [],
+    "오늘의집": [
+      {
+        "name": "영가구 플랫 화이트 반원 식탁 테이블 1000 1200 1400 3size",
+        "price": 56000,
+        "review_count": 1806,
+        "rating": 4.7,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "영가구 안나 원형 식탁테이블 600 700 800 1000 4size",
+        "price": 35800,
+        "review_count": 4643,
+        "rating": 4.8,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      }
+    ],
     "쿠팡": [],
     "네이버": []
   }
