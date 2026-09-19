@@ -38,26 +38,13 @@ SNAPSHOT_PATH = "data/last_snapshot.json"
 CATEGORY = "식탁, 테이블, 의자"
 
 # 각 회사가 입점한 플랫폼 목록 (플랫폼 이름 + 검색에 참고할 스토어 주소)
+# ⚠️ 테스트용 임시 버전: 비용을 아끼기 위해 "영가구" 1곳만 조사하도록 나머지 3곳을 잠시 빼둔 상태입니다.
+# 정상적으로 확인되면 원래의 4개 회사가 모두 들어있는 main.py로 다시 덮어써야 합니다.
 COMPANY_SOURCES = {
-    "폴인퍼니": {
-        "오늘의집": "store.ohou.se/brands/13004",
-        "쿠팡": "shop.coupang.com/fallinfuni",
-        "네이버": "brand.naver.com/fallinfuni",
-    },
     "영가구": {
         "오늘의집": "store.ohou.se/brands/3554",
         "쿠팡": "shop.coupang.com/younggagu",
         "네이버": "brand.naver.com/younggagu",
-    },
-    "에이비퍼니쳐": {
-        "오늘의집": "store.ohou.se/brands/6360",
-        "쿠팡": "shop.coupang.com/abfurniture",
-        "네이버": "brand.naver.com/abfurniture",
-    },
-    "위드퍼니처": {
-        "오늘의집": "store.ohou.se/brands/1061",
-        "쿠팡": "shop.coupang.com/A00061777",
-        "네이버": "smartstore.naver.com/withfurniture",
     },
 }
 
