@@ -5,18 +5,94 @@
     "네이버": []
   },
   "영가구": {
-    "오늘의집": [],
+    "오늘의집": [
+      {
+        "name": "레이븐 빈티지 원목 이지클린 쿠션 식탁 의자 2type 7colors",
+        "price": 54900,
+        "review_count": 3635,
+        "rating": 4.8
+      },
+      {
+        "name": "알프 리빙다이닝 카페 라운드 반원 식탁 테이블",
+        "price": 87000,
+        "review_count": 17,
+        "rating": 4.7
+      },
+      {
+        "name": "플랫 화이트 반원 식탁 테이블 800 1000 1200 1400 4size",
+        "price": null,
+        "review_count": 1970,
+        "rating": 4.7
+      },
+      {
+        "name": "플랫 화이트 식탁 벤치 의자 원룸 다이닝 긴 의자 950 1150 1350 3size",
+        "price": null,
+        "review_count": 193,
+        "rating": 4.7
+      }
+    ],
     "쿠팡": [],
     "네이버": []
   },
   "에이비퍼니쳐": {
-    "오늘의집": [],
+    "오늘의집": [
+      {
+        "name": "에이비퍼니쳐 아크 패브릭 아일랜드식탁 홈 바 의자 60cm (3colors)",
+        "price": 64900,
+        "review_count": 113,
+        "rating": 4.8
+      },
+      {
+        "name": "에이비퍼니쳐 마틴 가죽 홈바의자 아일랜드 모던 바 의자 체어 (60cm/70cm)",
+        "price": 58000,
+        "review_count": 128,
+        "rating": 4.7
+      }
+    ],
     "쿠팡": [],
     "네이버": []
   },
   "위드퍼니처": {
     "오늘의집": [],
-    "쿠팡": [],
-    "네이버": []
+    "쿠팡": [
+      {
+        "name": "밀키우드 800 원형 플레르 4인 주방 식탁 세트, 네추럴",
+        "price": 365600,
+        "review_count": 1,
+        "rating": null
+      },
+      {
+        "name": "밀키우드 800 원형 플레르 2인 주방 식탁 세트, 네추럴",
+        "price": 221800,
+        "review_count": 5,
+        "rating": null
+      },
+      {
+        "name": "아르망 1200 2단 버디 4개 야외 테이블 세트, 브라운",
+        "price": 196000,
+        "review_count": 6,
+        "rating": null
+      },
+      {
+        "name": "아르망 1800 테이블 버디 6개 야외 테이블 세트, 브라운",
+        "price": 286000,
+        "review_count": 4,
+        "rating": null
+      },
+      {
+        "name": "아르망 600 사각 버디 2개 야외 테이블 세트, 브라운",
+        "price": 122000,
+        "review_count": null,
+        "rating": null
+      }
+    ],
+    "네이버": [
+      {
+        "name": "브로몰딩 접이식 테이블",
+        "price": null,
+        "review_count": null,
+        "rating": null
+      }
+    ]
   }
 }
