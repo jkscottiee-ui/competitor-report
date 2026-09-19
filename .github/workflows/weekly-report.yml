@@ -23,10 +23,12 @@ jobs:
       - name: 의존성 설치
         run: pip install -r requirements.txt
 
-      - name: 리포트 생성 및 Slack 전송
+      - name: 리포트 생성 + 구글시트 기록 + Slack 요약 전송
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
         run: python main.py
 
       - name: 이번 주 데이터 저장 (다음 주 비교용)
