@@ -20,6 +20,7 @@ import sys
 import json
 import re
 import datetime
+import urllib.parse
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
@@ -73,20 +74,41 @@ def _full_url(store_hint: str) -> str:
     return f"https://{store_hint}"
 
 
+def _search_url(platform: str, company: str) -> str:
+    """플랫폼별 공개 검색결과 페이지 URL을 만든다.
+    브랜드 스토어 페이지 하나만으로는 목록이 비어있거나 차단되는 경우가 많아서,
+    실제 검색 결과 페이지도 함께 열어보게 해서 데이터가 잡힐 확률을 높인다."""
+    q = urllib.parse.quote(company)
+    if platform == "오늘의집":
+        return f"https://ohou.se/productions/feed?query={q}&search_affect_type=Recommend"
+    if platform == "쿠팡":
+        return f"https://www.coupang.com/np/search?q={q}"
+    if platform == "네이버":
+        return f"https://search.shopping.naver.com/search/all?query={q}"
+    return ""
+
+
 def get_platform_products(company: str, platform: str, store_hint: str) -> list:
     """플랫폼별로 브랜드 상품(카테고리 한정)을 조사해 JSON으로 추출.
 
-    web_fetch로 스토어 페이지 자체를 먼저 직접 열어보게 하고,
-    그걸로 부족할 때만 web_search로 보완하도록 지시한다.
+    web_fetch로 (1) 브랜드 스토어 페이지, (2) 플랫폼 검색결과 페이지를 순서대로 직접
+    열어보게 하고, 그걸로도 부족할 때만 web_search로 보완하도록 지시한다.
+    스토어 페이지 하나만 보는 이전 버전은 쿠팡/네이버처럼 스토어 페이지 자체가
+    차단되거나 목록이 비어 보이는 플랫폼에서 계속 빈 결과가 나왔는데, 검색결과
+    페이지를 추가로 시도하면 잡히는 경우가 있다.
     이번 버전은 상품별 상세 링크(url)와 대표 이미지(image_url)도 함께 요청해서
     구글시트에 사진과 함께 기록할 수 있게 한다."""
     store_url = _full_url(store_hint)
+    search_url = _search_url(platform, company)
     prompt = f"""
 '{platform}' 쇼핑 플랫폼에서 판매되는 가구 브랜드 '{company}'의 상품 현황을 조사해줘.
 
-이 스토어 페이지를 먼저 직접 열어봐(web_fetch 사용): {store_url}
-- 그 페이지에서 상품 목록/가격/리뷰수/평점/상품 상세 링크/대표 이미지 URL을 확인할 수 있으면 그 값을 사용해.
-- 스토어 페이지가 열리지 않거나(차단/오류), 정보가 불충분하면 web_search로 보완 조사해.
+아래 순서로 직접 페이지를 열어봐(web_fetch 사용):
+1) 브랜드 스토어 페이지: {store_url}
+2) 위에서 상품 정보가 부족하거나 페이지가 차단/오류나면, 플랫폼 검색결과 페이지: {search_url}
+- 두 페이지 중 하나에서라도 상품 목록/가격/리뷰수/평점/상품 상세 링크/대표 이미지 URL을 확인할 수 있으면 그 값을 사용해.
+- 검색결과 페이지를 볼 때는 '{company}' 브랜드가 맞는 상품만 골라야 해 (다른 브랜드 상품 섞이지 않게 주의).
+- 그래도 정보가 불충분하면 web_search로 보완 조사해.
 - 그래도 확인이 안 되면 억지로 지어내지 말고 해당 필드는 null로 남겨.
 
 조건:
@@ -114,15 +136,19 @@ def get_platform_products(company: str, platform: str, store_hint: str) -> list:
             },
             json={
                 "model": MODEL,
-                "max_tokens": 2000,
+                # 이전 버전은 2000으로 낮게 잡아서, 페이지 내용을 읽고 나면 최종 JSON을
+                # 다 쓰기 전에 토큰이 바닥나 "빈 응답(stop_reason=max_tokens)"이 되는
+                # 경우가 있었다. 출력 여유를 넉넉히 늘렸다.
+                "max_tokens": 4096,
                 "messages": [{"role": "user", "content": prompt}],
                 "tools": [
                     {
                         "type": "web_fetch_20250910",
                         "name": "web_fetch",
-                        "max_uses": 3,
-                        # 스토어 페이지가 커도 비용이 과도하게 늘지 않도록 상한을 둠
-                        "max_content_tokens": 30000,
+                        # 스토어 페이지 + 검색결과 페이지, 최대 2번 정도 더 시도할 여유
+                        "max_uses": 4,
+                        # 페이지 하나당 상한을 낮춰서, 최종 답변 쓸 토큰이 모자라지 않게 함
+                        "max_content_tokens": 15000,
                     },
                     {"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
                 ],
