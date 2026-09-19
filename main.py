@@ -1,15 +1,18 @@
 """
 매주 월요일, 지정된 경쟁사들의 대형 플랫폼(오늘의집/쿠팡/네이버) 판매 현황을
-Claude API 웹 검색으로 조사하고, Slack으로 전송하는 스크립트.
+Claude API 웹 검색으로 조사하고, 구글시트에 기록 + Slack에 요약을 전송하는 스크립트.
 
 - 홈페이지 동향은 조사하지 않음
 - 특정 카테고리(CATEGORY)의 상품만 추적
-- 각 플랫폼의 상품별 가격/리뷰수/평점을 조사하고, 지난주 대비 변화(신규 상품, 리뷰 증가폭)를 추적
-- 회사별로 Slack 메시지를 따로 전송
+- 각 플랫폼의 상품별 가격/리뷰수/평점/이미지를 조사하고, 지난주 대비 변화(신규 상품, 가격/리뷰 변동)를 추적
+- "진짜 자료"는 구글시트(경쟁사 제품 스냅샷)에 상세 기록하고, Slack에는 회사별 요약 + 시트 링크만 전송
 
 필요한 환경변수:
-- ANTHROPIC_API_KEY : Anthropic API 키
-- SLACK_WEBHOOK_URL : Slack Incoming Webhook URL
+- ANTHROPIC_API_KEY        : Anthropic API 키
+- SLACK_WEBHOOK_URL        : Slack Incoming Webhook URL
+- GOOGLE_SERVICE_ACCOUNT_JSON : 구글 서비스 계정 키(JSON) 전체 내용을 문자열로
+- GOOGLE_SHEET_ID          : "경쟁사 제품 스냅샷" 구글시트의 ID (URL의 /d/ 뒤 부분)
+- GOOGLE_SHEET_TAB_NAME    : (선택) 기록할 탭 이름, 기본값 "스냅샷"
 """
 
 import os
@@ -18,9 +21,14 @@ import json
 import re
 import datetime
 import requests
+import gspread
+from google.oauth2.service_account import Credentials
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
+GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
+GOOGLE_SHEET_TAB_NAME = os.environ.get("GOOGLE_SHEET_TAB_NAME", "스냅샷")
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 MODEL = "claude-sonnet-5"
@@ -56,10 +64,14 @@ COMPANY_SOURCES = {
 
 def check_env():
     missing = []
-    if not ANTHROPIC_API_KEY:
-        missing.append("ANTHROPIC_API_KEY")
-    if not SLACK_WEBHOOK_URL:
-        missing.append("SLACK_WEBHOOK_URL")
+    for name in (
+        "ANTHROPIC_API_KEY",
+        "SLACK_WEBHOOK_URL",
+        "GOOGLE_SERVICE_ACCOUNT_JSON",
+        "GOOGLE_SHEET_ID",
+    ):
+        if not os.environ.get(name):
+            missing.append(name)
     if missing:
         print(f"[오류] 다음 환경변수가 설정되지 않았습니다: {', '.join(missing)}")
         sys.exit(1)
@@ -77,17 +89,16 @@ def _full_url(store_hint: str) -> str:
 def get_platform_products(company: str, platform: str, store_hint: str) -> list:
     """플랫폼별로 브랜드 상품(카테고리 한정)을 조사해 JSON으로 추출.
 
-    이전 버전은 web_search(검색 스니펫)에만 의존했는데, 오늘의집/쿠팡/네이버 같은
-    플랫폼의 상품 목록 페이지는 동적 렌더링이라 검색 스니펫만으로는 가격/리뷰수 같은
-    실제 값이 거의 잡히지 않았다 (그래서 매번 '상품을 찾지 못했습니다'가 나옴).
-    이번 버전은 web_fetch로 스토어 페이지 자체를 먼저 직접 열어보게 하고,
-    그걸로 부족할 때만 web_search로 보완하도록 지시를 바꿨다."""
+    web_fetch로 스토어 페이지 자체를 먼저 직접 열어보게 하고,
+    그걸로 부족할 때만 web_search로 보완하도록 지시한다.
+    이번 버전은 상품별 상세 링크(url)와 대표 이미지(image_url)도 함께 요청해서
+    구글시트에 사진과 함께 기록할 수 있게 한다."""
     store_url = _full_url(store_hint)
     prompt = f"""
 '{platform}' 쇼핑 플랫폼에서 판매되는 가구 브랜드 '{company}'의 상품 현황을 조사해줘.
 
 이 스토어 페이지를 먼저 직접 열어봐(web_fetch 사용): {store_url}
-- 그 페이지에서 상품 목록/가격/리뷰수/평점을 확인할 수 있으면 그 값을 사용해.
+- 그 페이지에서 상품 목록/가격/리뷰수/평점/상품 상세 링크/대표 이미지 URL을 확인할 수 있으면 그 값을 사용해.
 - 스토어 페이지가 열리지 않거나(차단/오류), 정보가 불충분하면 web_search로 보완 조사해.
 - 그래도 확인이 안 되면 억지로 지어내지 말고 해당 필드는 null로 남겨.
 
@@ -96,10 +107,11 @@ def get_platform_products(company: str, platform: str, store_hint: str) -> list:
 - 반드시 '{platform}' 플랫폼에 올라온 '{company}' 상품이어야 함 (다른 플랫폼/다른 브랜드 제외)
 - 브랜드명은 띄어쓰기나 '처/쳐' 등 표기가 다를 수 있으니 유사 표기도 함께 확인
 - 확인 가능한 상위 3~5개만
+- image_url은 상품 사진의 실제 이미지 파일 주소(og:image, 썸네일 src 등)를 우선 사용
 
 다른 설명이나 인사말 없이, 순수 JSON 한 개만 응답해 (마크다운 코드블록 표시도 쓰지 마):
 
-{{"products": [{{"name": "상품명", "price": 숫자또는null, "review_count": 숫자또는null, "rating": 숫자또는null}}]}}
+{{"products": [{{"name": "상품명", "price": 숫자또는null, "review_count": 숫자또는null, "rating": 숫자또는null, "url": "상품상세링크또는null", "image_url": "이미지주소또는null"}}]}}
 
 - price는 원 단위 숫자만 (콤마/원 제외), review_count는 숫자만, 확인 불가한 값은 null
 - 관련 상품을 찾을 수 없으면 {{"products": []}}
@@ -170,7 +182,9 @@ def save_snapshot(snapshot: dict):
         json.dump(snapshot, f, ensure_ascii=False, indent=2)
 
 
-def compare_products(prev_by_platform: dict, curr_by_platform: dict) -> list:
+def annotate_products(prev_by_platform: dict, curr_by_platform: dict) -> tuple:
+    """각 상품에 '_status'(신규/가격변동/리뷰증가/없음)와 '_note'(사람이 읽을 상세 설명)를
+    붙이고, 전체 변화 요약 리스트도 함께 반환한다. (구글시트의 상태/비고 열에 사용)"""
     changes = []
     for platform, curr_products in curr_by_platform.items():
         prev_products = prev_by_platform.get(platform, [])
@@ -178,92 +192,93 @@ def compare_products(prev_by_platform: dict, curr_by_platform: dict) -> list:
 
         for p in curr_products:
             name = p.get("name")
+            p["_status"] = ""
+            p["_note"] = ""
             if not name:
                 continue
             prev = prev_by_name.get(name)
 
             if prev is None:
+                p["_status"] = "신규"
                 changes.append(f"🆕 신규 상품 등장 [{platform}]: {name}")
                 continue
 
+            notes = []
             prev_reviews, curr_reviews = prev.get("review_count"), p.get("review_count")
             if isinstance(prev_reviews, (int, float)) and isinstance(curr_reviews, (int, float)):
                 delta = curr_reviews - prev_reviews
                 if delta > 0:
+                    p["_status"] = "리뷰증가"
+                    notes.append(f"리뷰 {prev_reviews}→{curr_reviews} (+{delta})")
                     changes.append(f"📈 리뷰 증가 [{platform}]: {name} ({prev_reviews} → {curr_reviews}, +{delta})")
 
             prev_price, curr_price = prev.get("price"), p.get("price")
             if isinstance(prev_price, (int, float)) and isinstance(curr_price, (int, float)) and prev_price != curr_price:
                 arrow = "⬇️" if curr_price < prev_price else "⬆️"
+                p["_status"] = "가격변동"
+                notes.append(f"{prev_price:,.0f}원→{curr_price:,.0f}원")
                 changes.append(f"{arrow} 가격 변동 [{platform}]: {name} ({prev_price:,.0f}원 → {curr_price:,.0f}원)")
 
-    return changes
+            p["_note"] = " / ".join(notes)
+
+    return curr_by_platform, changes
 
 
-def build_company_report_text(company: str, by_platform: dict, changes: list, today: str) -> str:
-    lines = [f"*:mag: {company} 주간 판매 동향 - {CATEGORY} ({today})*", ""]
+def get_sheet_worksheet():
+    """GOOGLE_SERVICE_ACCOUNT_JSON / GOOGLE_SHEET_ID 환경변수로 시트에 접근한다."""
+    info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_info(info, scopes=scopes)
+    client = gspread.authorize(creds)
+    spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
+    return spreadsheet.worksheet(GOOGLE_SHEET_TAB_NAME)
 
-    for platform in COMPANY_SOURCES[company]:
-        products = by_platform.get(platform, [])
-        lines.append(f"_{platform}:_")
-        if products:
-            for p in products:
-                name = p.get("name", "?")
-                detail = []
-                if p.get("price"):
-                    detail.append(f"{p['price']:,.0f}원")
-                if p.get("rating"):
-                    detail.append(f"⭐{p['rating']}")
-                if p.get("review_count") is not None:
-                    detail.append(f"리뷰 {p['review_count']}개")
-                lines.append(f"  • {name}" + (f" ({' / '.join(detail)})" if detail else ""))
-        else:
-            lines.append("  검색 결과에서 상품을 찾지 못했습니다.")
-        lines.append("")
 
+def append_products_to_sheet(worksheet, company: str, by_platform: dict, today: str):
+    """상품별로 한 행씩 시트에 추가한다.
+    열 순서: 날짜 | 플랫폼 | 브랜드 | 제품명 | 판매가 | 리뷰수 | URL | 상태 | 비고 | 평점 | 이미지"""
+    rows = []
+    for platform, products in by_platform.items():
+        if not products:
+            rows.append([
+                today, platform, company, "(상품 없음)", "", "", "", "조사 실패", "", "", "",
+            ])
+            continue
+        for p in products:
+            image_formula = f'=IMAGE("{p["image_url"]}", 4, 60, 60)' if p.get("image_url") else ""
+            rows.append([
+                today,
+                platform,
+                company,
+                p.get("name", ""),
+                p.get("price") if p.get("price") is not None else "",
+                p.get("review_count") if p.get("review_count") is not None else "",
+                p.get("url") or "",
+                p.get("_status", ""),
+                p.get("_note", ""),
+                p.get("rating") if p.get("rating") is not None else "",
+                image_formula,
+            ])
+    if rows:
+        worksheet.append_rows(rows, value_input_option="USER_ENTERED")
+
+
+def build_company_summary_text(company: str, by_platform: dict, changes: list, sheet_url: str) -> str:
+    """Slack에는 회사별 요약(플랫폼별 발견 개수 + 변화 유무)과 시트 링크만 전송한다."""
+    lines = [f"*:mag: {company} 주간 판매 동향 요약 - {CATEGORY}*"]
+    for platform, products in by_platform.items():
+        lines.append(f"  • {platform}: {len(products)}개 상품 확인" if products else f"  • {platform}: 상품 없음")
     if changes:
-        lines.append("_전주 대비 변화:_")
-        for c in changes:
-            lines.append(f"  • {c}")
+        lines.append(f"  ⚡ 변화 {len(changes)}건 감지 (신규/가격변동/리뷰증가)")
     else:
-        lines.append("_전주 대비 변화: 특이사항 없음_")
-
+        lines.append("  변화 없음")
+    lines.append(f"상세 데이터: {sheet_url}")
     return "\n".join(lines)
 
 
-def split_into_chunks(text: str, limit: int = 2000) -> list:
-    chunks, current = [], ""
-
-    def flush():
-        nonlocal current
-        if current:
-            chunks.append(current)
-            current = ""
-
-    for line in text.split("\n"):
-        while len(line) > limit:
-            piece, line = line[:limit], line[limit:]
-            flush()
-            chunks.append(piece)
-        candidate = f"{current}\n{line}" if current else line
-        if len(candidate) > limit and current:
-            flush()
-            current = line
-        else:
-            current = candidate
-
-    flush()
-    return chunks if chunks else [text]
-
-
-def send_text_to_slack(text: str) -> int:
-    chunks = split_into_chunks(text)
-    total = len(chunks)
-    for idx, chunk in enumerate(chunks, start=1):
-        payload_text = chunk if total == 1 else f"{chunk}\n\n_({idx}/{total})_"
-        resp = requests.post(SLACK_WEBHOOK_URL, json={"text": payload_text}, timeout=30)
-        resp.raise_for_status()
-    return total
+def send_text_to_slack(text: str):
+    resp = requests.post(SLACK_WEBHOOK_URL, json={"text": text}, timeout=30)
+    resp.raise_for_status()
 
 
 def main():
@@ -271,6 +286,13 @@ def main():
     prev_snapshot = load_snapshot()
     new_snapshot = {}
     today = datetime.datetime.now().strftime("%Y-%m-%d")
+    sheet_url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/edit"
+
+    worksheet = None
+    try:
+        worksheet = get_sheet_worksheet()
+    except Exception as e:
+        print(f"[오류] 구글시트 연결 실패 (시트 기록은 건너뜁니다): {e}")
 
     for company, platforms in COMPANY_SOURCES.items():
         print(f"조사 중: {company}")
@@ -283,12 +305,18 @@ def main():
         if not isinstance(prev_by_platform, dict):
             prev_by_platform = {}
 
-        changes = compare_products(prev_by_platform, by_platform)
+        by_platform, changes = annotate_products(prev_by_platform, by_platform)
         new_snapshot[company] = by_platform
 
-        report_text = build_company_report_text(company, by_platform, changes, today)
-        sent = send_text_to_slack(report_text)
-        print(f"  → '{company}' Slack 전송 완료 ({sent}개 메시지)")
+        if worksheet is not None:
+            try:
+                append_products_to_sheet(worksheet, company, by_platform, today)
+            except Exception as e:
+                print(f"[오류] '{company}' 시트 기록 실패: {e}")
+
+        summary_text = build_company_summary_text(company, by_platform, changes, sheet_url)
+        send_text_to_slack(summary_text)
+        print(f"  → '{company}' Slack 요약 전송 완료")
 
     save_snapshot(new_snapshot)
 
