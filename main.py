@@ -65,17 +65,36 @@ def check_env():
         sys.exit(1)
 
 
+def _full_url(store_hint: str) -> str:
+    """store_hint에 스킴이 없으면 https:// 를 붙여 완전한 URL로 만든다.
+    (web_fetch 도구는 대화(user 메시지) 안에 이미 등장한 URL만 가져올 수 있으므로,
+    프롬프트에 반드시 완전한 형태의 URL을 넣어줘야 한다.)"""
+    if store_hint.startswith("http://") or store_hint.startswith("https://"):
+        return store_hint
+    return f"https://{store_hint}"
+
+
 def get_platform_products(company: str, platform: str, store_hint: str) -> list:
-    """플랫폼별로 브랜드 상품(카테고리 한정)을 웹 검색으로 조사해 JSON으로 추출.
-    도메인 제한을 걸지 않고, 프롬프트로 대상 플랫폼을 지정한다."""
+    """플랫폼별로 브랜드 상품(카테고리 한정)을 조사해 JSON으로 추출.
+
+    이전 버전은 web_search(검색 스니펫)에만 의존했는데, 오늘의집/쿠팡/네이버 같은
+    플랫폼의 상품 목록 페이지는 동적 렌더링이라 검색 스니펫만으로는 가격/리뷰수 같은
+    실제 값이 거의 잡히지 않았다 (그래서 매번 '상품을 찾지 못했습니다'가 나옴).
+    이번 버전은 web_fetch로 스토어 페이지 자체를 먼저 직접 열어보게 하고,
+    그걸로 부족할 때만 web_search로 보완하도록 지시를 바꿨다."""
+    store_url = _full_url(store_hint)
     prompt = f"""
-'{platform}' 쇼핑 플랫폼에서 판매되는 가구 브랜드 '{company}'의 상품을 웹 검색으로 조사해줘.
-참고 스토어 주소: {store_hint}
+'{platform}' 쇼핑 플랫폼에서 판매되는 가구 브랜드 '{company}'의 상품 현황을 조사해줘.
+
+이 스토어 페이지를 먼저 직접 열어봐(web_fetch 사용): {store_url}
+- 그 페이지에서 상품 목록/가격/리뷰수/평점을 확인할 수 있으면 그 값을 사용해.
+- 스토어 페이지가 열리지 않거나(차단/오류), 정보가 불충분하면 web_search로 보완 조사해.
+- 그래도 확인이 안 되면 억지로 지어내지 말고 해당 필드는 null로 남겨.
 
 조건:
 - '{CATEGORY}' 및 이와 밀접히 관련된 상품(다이닝 체어, 스툴, 벤치, 다이닝 세트 등)만 포함
 - 반드시 '{platform}' 플랫폼에 올라온 '{company}' 상품이어야 함 (다른 플랫폼/다른 브랜드 제외)
-- 브랜드명은 띄어쓰기나 '처/쳐' 등 표기가 다를 수 있으니 유사 표기도 함께 검색
+- 브랜드명은 띄어쓰기나 '처/쳐' 등 표기가 다를 수 있으니 유사 표기도 함께 확인
 - 확인 가능한 상위 3~5개만
 
 다른 설명이나 인사말 없이, 순수 JSON 한 개만 응답해 (마크다운 코드블록 표시도 쓰지 마):
@@ -96,13 +115,20 @@ def get_platform_products(company: str, platform: str, store_hint: str) -> list:
             },
             json={
                 "model": MODEL,
-                "max_tokens": 1500,
+                "max_tokens": 2000,
                 "messages": [{"role": "user", "content": prompt}],
                 "tools": [
+                    {
+                        "type": "web_fetch_20250910",
+                        "name": "web_fetch",
+                        "max_uses": 3,
+                        # 스토어 페이지가 커도 비용이 과도하게 늘지 않도록 상한을 둠
+                        "max_content_tokens": 30000,
+                    },
                     {"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
                 ],
             },
-            timeout=120,
+            timeout=180,
         )
         response.raise_for_status()
         data = response.json()
