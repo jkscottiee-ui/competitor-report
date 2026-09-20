@@ -121,6 +121,12 @@ def get_platform_products(company: str, platform: str, store_hint: str) -> list:
     구글시트에 사진과 함께 기록할 수 있게 한다."""
     store_url = _full_url(store_hint)
     search_url = _search_url(platform, company)
+    detail_hint = (
+        "오늘의집 상품 상세 페이지 주소는 보통 'https://ohou.se/productions/상품고유숫자ID/selling' "
+        "형태야. 목록/검색 페이지 안의 링크(href)에서 이 패턴이 보이면 그 링크를 그 상품의 url로 사용해."
+        if platform == "오늘의집" else ""
+    )
+    detail_hint_line = f"- {detail_hint}" if detail_hint else ""
     prompt = f"""
 '{platform}' 쇼핑 플랫폼에서 판매되는 가구 브랜드 '{company}'의 상품 현황을 조사해줘.
 
@@ -129,10 +135,12 @@ def get_platform_products(company: str, platform: str, store_hint: str) -> list:
 2) 위에서 상품 정보가 부족하거나 페이지가 차단/오류나면, 플랫폼 검색결과 페이지: {search_url}
 - 두 페이지 중 하나에서라도 상품 목록/가격/리뷰수/평점/상품 상세 링크/대표 이미지 URL을 확인할 수 있으면 그 값을 사용해.
 - 검색결과 페이지를 볼 때는 '{company}' 브랜드가 맞는 상품만 골라야 해 (다른 브랜드 상품 섞이지 않게 주의).
-- 그래도 정보가 불충분하면 web_search로 보완 조사해.
-- 상품은 찾았는데 그 상품의 url이나 image_url만 비어있다면, 포기하지 말고 "{company} <상품명>" 같은 식으로
-  web_search를 한 번 더 해서 그 상품의 상세 페이지 링크나 대표 이미지를 찾아봐
-  (페이지가 이미지를 자바스크립트로 나중에 불러오는 방식이라 최초 페이지 내용만으로는 안 보일 때가 있음).
+{detail_hint_line}
+- url은 찾았는데 image_url이 비어있는 상품은, 그 상세 페이지 링크를 한 번 더 web_fetch로 열어서 대표 이미지를
+  확인해 (og:image 메타태그나 대표 썸네일을 우선 사용 — 목록 페이지는 이미지가 자바스크립트로 나중에
+  로드되는 경우가 많지만, 상세 페이지는 공유/검색 노출용으로 이미지 정보가 서버에서 바로 내려오는 경우가 많음).
+- url 자체를 목록/검색 페이지에서 못 찾은 상품은, "{company} <상품명>" 으로 web_search를 해서 상세 페이지
+  링크나 대표 이미지를 보완해봐 (비용 절약을 위해 이 추가 조사는 최대 5개 상품까지만 하고, 그 이상은 넘어가도 돼).
 - 그래도 확인이 안 되면 억지로 지어내지 말고 해당 필드는 null로 남겨.
 
 조건:
@@ -171,12 +179,13 @@ def get_platform_products(company: str, platform: str, store_hint: str) -> list:
                     {
                         "type": "web_fetch_20250910",
                         "name": "web_fetch",
-                        # 스토어 페이지 + 검색결과 페이지, 최대 2번 정도 더 시도할 여유
-                        "max_uses": 4,
+                        # 스토어 페이지 + 검색결과 페이지 + 이미지 확인용 상세 페이지 몇 개까지
+                        # 열어볼 수 있도록 여유를 늘림 (URL/이미지 채우기 개선을 위해 4 -> 8)
+                        "max_uses": 8,
                         # 페이지 하나당 상한을 낮춰서, 최종 답변 쓸 토큰이 모자라지 않게 함
                         "max_content_tokens": 15000,
                     },
-                    {"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
+                    {"type": "web_search_20250305", "name": "web_search", "max_uses": 6},
                 ],
             },
             timeout=180,
