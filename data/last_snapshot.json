@@ -1,45 +1,20 @@
 {
   "폴인퍼니": {
-    "오늘의집": [],
-    "쿠팡": [],
-    "네이버": []
-  },
-  "영가구": {
     "오늘의집": [
       {
-        "name": "안나 원형 식탁테이블 600 700 800 1000 4size",
-        "price": 35800,
-        "review_count": 4839,
-        "rating": 4.7,
-        "url": "https://ohou.se/productions/150929/selling",
-        "image_url": "https://younggagu.com/web/product/medium/202605/18fe39dc70c9bea2fd7afb11cfd7510d.jpg",
-        "_status": "신규",
-        "_note": ""
-      },
-      {
-        "name": "테일러 미드센츄리모던 우드 가죽 철제 인테리어 식탁의자 2colors",
-        "price": 219000,
-        "review_count": 396,
-        "rating": 4.8,
-        "url": null,
-        "image_url": "https://younggagu.com/web/product/medium/202608/002d724194e8d5ac6938e13414165ddf.jpg",
-        "_status": "신규",
-        "_note": ""
-      },
-      {
-        "name": "1+1 로비아 고급 원목 가죽 패브릭 인테리어 식탁 의자 3colors",
-        "price": 115800,
-        "review_count": 555,
-        "rating": 4.8,
-        "url": null,
-        "image_url": "https://younggagu.com/web/product/medium/202605/b7dbcb9b4233b2fb86ee3d52a4ad8053.jpg",
-        "_status": "신규",
-        "_note": ""
-      },
-      {
-        "name": "픽 se 미드센츄리 모던 원목 철제 디자인 의자 4colors",
+        "name": "폴인퍼니 나폴리 포세린 세라믹 타원 식탁 테이블 크림 4인용 6인용 1600/1800/2000",
         "price": null,
-        "review_count": 891,
+        "review_count": null,
+        "rating": null,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "폴인퍼니 아벨르 원목 포세린 세라믹 원형 카페 식탁 테이블",
+        "price": 299000,
+        "review_count": 8,
         "rating": 4.6,
         "url": null,
         "image_url": null,
@@ -47,22 +22,118 @@
         "_note": ""
       },
       {
-        "name": "1+1 픽 DCM 미드센추리모던 빈티지 철제 인테리어의자 3colors",
-        "price": 150000,
-        "review_count": 39,
-        "rating": 4.4,
+        "name": "폴인퍼니 카모 포세린 세라믹 식탁 테이블 6인용 원목 1800",
+        "price": 553000,
+        "review_count": 2,
+        "rating": 4.9,
         "url": null,
         "image_url": null,
         "_status": "신규",
         "_note": ""
       },
       {
-        "name": "레이븐 빈티지 원목 이지클린 쿠션 식탁 의자 2type 7colors",
+        "name": "폴인퍼니 1+1 듀이 식탁 의자 플라스틱 카페 디자인의자",
+        "price": 46800,
+        "review_count": 3425,
+        "rating": 4.8,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "폴인퍼니 듀이 식탁 의자 플라스틱 카페 디자인의자(단품)",
+        "price": 90400,
+        "review_count": 6439,
+        "rating": 4.8,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "폴인퍼니 이클립스 포세린 세라믹 식탁 테이블 크림 4인용 6인용 1800/2000/2200",
+        "price": null,
+        "review_count": 124,
+        "rating": 4.9,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      }
+    ],
+    "쿠팡": [],
+    "네이버": []
+  },
+  "영가구": {
+    "오늘의집": [
+      {
+        "name": "영가구 플랫 화이트 반원 식탁 테이블 800/1000/1200/1400 (4size)",
+        "price": null,
+        "review_count": 2120,
+        "rating": 4.8,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "영가구 플랫 화이트 타원형 식탁 테이블 1200/1400/1600 (3size)",
+        "price": null,
+        "review_count": 584,
+        "rating": 4.7,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "영가구 베티 포세린 세라믹 식탁 테이블 원목 4인 6인 (3size)",
+        "price": null,
+        "review_count": 7,
+        "rating": 4.7,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "영가구 헤이븐 쿠션 원목 인테리어 식탁의자 사이드체어 4color (1+1)",
+        "price": 258000,
+        "review_count": 9,
+        "rating": 4.8,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "영가구 헤이그 이지클린 편한 업소용 카페 인테리어 패브릭 식탁의자",
+        "price": null,
+        "review_count": 65,
+        "rating": 4.6,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "영가구 베르노 홈바의자 높은 아일랜드 식탁 바 체어 4color",
+        "price": null,
+        "review_count": 5,
+        "rating": 4.8,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "영가구 레이븐 빈티지 원목 이지클린 쿠션 식탁 의자 2type 7colors",
         "price": null,
         "review_count": null,
         "rating": null,
         "url": null,
-        "image_url": "https://younggagu.com/web/product/medium/202504/9aca5a0f01d6f86164572e301078f002.jpg",
+        "image_url": null,
         "_status": "신규",
         "_note": ""
       }
@@ -73,12 +144,62 @@
   "에이비퍼니쳐": {
     "오늘의집": [
       {
-        "name": "에이비퍼니쳐 마지오 캔틸레버 가죽 암체어",
-        "price": 159000,
+        "name": "엘리 플라스틱 가죽 쿠션 편한 카페 인테리어 디자인 식탁 의자",
+        "price": null,
         "review_count": null,
         "rating": null,
         "url": null,
-        "image_url": "https://img.danuri.io/catalog-image/171/475/016/38765ca0c0fa40b684f1de82e96ecaee.jpg",
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "1+1 테트리스 베이직 스택 플라스틱 카페 식탁 의자 7colors",
+        "price": null,
+        "review_count": 172,
+        "rating": 4.9,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "카페 인테리어 디자인 식탁의자 컬러 커스텀 스낵체어",
+        "price": null,
+        "review_count": 311,
+        "rating": 4.8,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "[오늘의집 단독] 시에나 오크 다이닝체어 2개입 3colors",
+        "price": null,
+        "review_count": 22,
+        "rating": 4.9,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "엘리 골드프레임 벨벳체어 카페 식탁 화장대의자 디자인의자 3colors",
+        "price": null,
+        "review_count": 246,
+        "rating": 4.7,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "코스모 스태킹 고정의자 기본형 7color",
+        "price": null,
+        "review_count": null,
+        "rating": null,
+        "url": null,
+        "image_url": null,
         "_status": "신규",
         "_note": ""
       }
@@ -87,7 +208,58 @@
     "네이버": []
   },
   "위드퍼니처": {
-    "오늘의집": [],
+    "오늘의집": [
+      {
+        "name": "위드퍼니처 리사 몬스암 2인 야외 실내 테이블 의자 세트 카페",
+        "price": 150000,
+        "review_count": 20,
+        "rating": 4.9,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "위드퍼니처 유로 아이 800 39번 4인 야외 테이블 세트 카페 의자",
+        "price": 179000,
+        "review_count": 67,
+        "rating": 4.7,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "위드퍼니처 몬스 테이블 야외 실내 사이드 카페 디자인 인테리어",
+        "price": 50000,
+        "review_count": 35,
+        "rating": 4.9,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "위드퍼니처 리사 암체어 야외 테라스 인테리어 카페 디자인 의자",
+        "price": 34000,
+        "review_count": 33,
+        "rating": 4.7,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      },
+      {
+        "name": "위드퍼니처 스킨 600 원형 라탄 테이블 의자 2개 2인 세트 카페",
+        "price": 173000,
+        "review_count": 24,
+        "rating": 4.7,
+        "url": null,
+        "image_url": null,
+        "_status": "신규",
+        "_note": ""
+      }
+    ],
     "쿠팡": [],
     "네이버": []
   }
