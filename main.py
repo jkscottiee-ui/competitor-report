@@ -11,6 +11,14 @@
   이제 AI 추측 없이 이 API를 그대로 호출해서 100% 결정적이고 정확한 데이터를 가져온다.
   상품 고유 ID를 기준으로 주차별 비교를 하기 때문에 "신규/가격변동/리뷰증가/판매중단 의심" 판정도
   훨씬 신뢰할 수 있다.
+- (2026-09-22 403 차단 대응) GitHub Actions에서 돌렸더니 오늘의집 API가 403 Forbidden을 반환하는
+  문제가 발생했다. 같은 요청을 실제 브라우저(사용자 컴퓨터)에서 호출하면 지금도 정상(200)이라,
+  이건 요청 내용 자체보다는 "GitHub Actions 서버에서 오는 요청"이라는 점(IP/봇 패턴) 때문에
+  걸릴 가능성이 높다. 우선 시도해볼 수 있는 완화책으로 (1) 실제 브라우저가 보내는 것과 최대한
+  비슷한 Referer/Origin/Accept-Language 헤더 추가, (2) 요청 사이에 약간의 지연, (3) 403을
+  만나면 잠시 기다렸다가 재시도하는 로직을 추가했다. 다만 이게 GitHub Actions IP 자체를
+  막아놓은 것이라면 헤더만으로는 완전히 해결이 안 될 수도 있어서, 재시도 후에도 계속 403이면
+  실행 환경(예: 자체 러너)을 바꾸는 걸 고려해야 한다.
 - (2026-09-22 범위 축소) 우리 사업은 의자 중심이라 테이블류(테이블·식탁·책상)는 수집 대상에서
   완전히 제외했다 (OHOU_CATEGORIES 참고). 또한 의자 중에서도 야외용(테라스/캠핑용 등)은
   작업 대상이 아니라서 제외한다 — 다만 오늘의집 API 응답에는 상품별로 "이건 야외용" 이라고
@@ -22,6 +30,9 @@
   걸러낸다 (100% 완벽하지는 않은 휴리스틱이라, 실제 결과를 보고 키워드를 조정할 수 있다).
 - 쿠팡/네이버는 여전히 보류 상태 (ACTIVE_PLATFORMS 참고). 나중에 공식 API 연동 시 이 구조를
   참고해서 별도의 결정적 수집 함수를 추가하면 된다 (AI 추측 방식으로는 돌아가지 않을 것).
+- (2026-09-26 테스트용 제한) 시트를 완전히 비우고 다시 검증하는 테스트라서, 카테고리당 상품을
+  전부 가져오지 않고 MAX_PRODUCTS_PER_CATEGORY(=10)개까지만 가져오도록 임시로 제한해뒀다.
+  실제 운영으로 넘어갈 때는 이 값을 None으로 바꾸면 된다.
 - "진짜 자료"는 구글시트(경쟁사 제품 스냅샷)에 상세 기록하고, Slack에는 회사별 요약 + 시트 링크만 전송
 
 필요한 환경변수:
@@ -38,6 +49,8 @@ import os
 import sys
 import json
 import re
+import time
+import random
 import datetime
 import requests
 import gspread
@@ -49,6 +62,11 @@ GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
 GOOGLE_SHEET_TAB_NAME = os.environ.get("GOOGLE_SHEET_TAB_NAME", "스냅샷")
 
 SNAPSHOT_PATH = "data/last_snapshot.json"
+
+# (2026-09-26 테스트용) 시트를 깨끗하게 비우고 새로 검증하는 테스트라, 브랜드당 전체를 다
+# 긁어오지 않고 카테고리당 10개까지만 가져오도록 제한한다. 실제 운영에 들어가면 이 값을
+# None으로 바꿔서 제한을 풀면 된다.
+MAX_PRODUCTS_PER_CATEGORY = 10
 
 # 지금 결정적(deterministic)으로 수집 가능한 플랫폼만 여기 넣는다.
 # 쿠팡/네이버는 봇 차단 때문에 지금 방식(공식 API 없이)으로는 신뢰할 수 있는 수집이 안 되므로
@@ -102,11 +120,28 @@ COMPANY_SOURCES = {
     },
 }
 
+# 실제 브라우저가 이 API를 부를 때 함께 보내는 헤더들을 최대한 비슷하게 흉내낸다.
+# (Referer/Origin은 브랜드별로 달라져서 요청 시점에 채워 넣는다 - _build_request_headers 참고)
 REQUEST_HEADERS = {
     "Accept": "application/json",
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Origin": "https://store.ohou.se",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
 }
+
+# 403(차단)을 만났을 때 재시도 설정 - GitHub Actions처럼 브라우저가 아닌 환경에서 오는 요청을
+# 오늘의집 쪽에서 일시적으로 더 엄격하게 걸러낼 수 있어서, 약간 쉬었다가 다시 시도해본다.
+MAX_RETRIES_ON_BLOCK = 3
+RETRY_BACKOFF_SECONDS = [3, 8, 15]
+
+
+def _build_request_headers(brand_id: int, category_id: int) -> dict:
+    """실제 브라우저에서 이 API를 호출할 때 함께 실리는 Referer(예: 브랜드 페이지에서
+    카테고리를 클릭해서 들어온 상태)를 최대한 똑같이 흉내낸 헤더를 만든다."""
+    headers = dict(REQUEST_HEADERS)
+    headers["Referer"] = f"https://store.ohou.se/brands/{brand_id}?categoryId={category_id}"
+    return headers
 
 
 def check_env():
@@ -138,18 +173,40 @@ def fetch_ohou_category_products(brand_id: int, category_id: int, category_label
     outdoor_excluded_count = 0
     page = 1
     total_count = None
+    headers = _build_request_headers(brand_id, category_id)
     while True:
         url = (
             f"https://store.ohou.se/api/brands/{brand_id}/products"
             f"?brandId={brand_id}&page={page}&order=popular&filterQuery=categoryId%3D{category_id}"
         )
-        try:
-            resp = requests.get(url, headers=REQUEST_HEADERS, timeout=20)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as e:
-            print(f"    [오류] 오늘의집 API 호출 실패 (brand={brand_id}, category={category_label}, page={page}): {e}")
+
+        data = None
+        for attempt in range(MAX_RETRIES_ON_BLOCK + 1):
+            try:
+                resp = requests.get(url, headers=headers, timeout=20)
+                if resp.status_code == 403 and attempt < MAX_RETRIES_ON_BLOCK:
+                    wait_s = RETRY_BACKOFF_SECONDS[min(attempt, len(RETRY_BACKOFF_SECONDS) - 1)]
+                    print(f"    [경고] 403(차단 추정) - {wait_s}초 대기 후 재시도 "
+                          f"({attempt + 1}/{MAX_RETRIES_ON_BLOCK}) (brand={brand_id}, category={category_label}, page={page})")
+                    time.sleep(wait_s)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                break
+            except Exception as e:
+                if attempt < MAX_RETRIES_ON_BLOCK:
+                    wait_s = RETRY_BACKOFF_SECONDS[min(attempt, len(RETRY_BACKOFF_SECONDS) - 1)]
+                    print(f"    [경고] 오늘의집 API 호출 실패, {wait_s}초 대기 후 재시도 "
+                          f"({attempt + 1}/{MAX_RETRIES_ON_BLOCK}) (brand={brand_id}, category={category_label}, page={page}): {e}")
+                    time.sleep(wait_s)
+                    continue
+                print(f"    [오류] 오늘의집 API 호출 최종 실패 (brand={brand_id}, category={category_label}, page={page}): {e}")
+
+        if data is None:
             break
+
+        # 요청 사이에 짧게 쉬어서 너무 기계적인(봇처럼 보이는) 연속 호출 패턴을 피한다.
+        time.sleep(random.uniform(0.4, 1.0))
 
         page_products = data.get("products", [])
         if total_count is None:
@@ -185,6 +242,10 @@ def fetch_ohou_category_products(brand_id: int, category_id: int, category_label
                 "is_sold_out": bool(p.get("isSoldOut")),
                 "is_selling": p.get("isSelling", True),
             })
+
+        if MAX_PRODUCTS_PER_CATEGORY is not None and len(products) >= MAX_PRODUCTS_PER_CATEGORY:
+            products = products[:MAX_PRODUCTS_PER_CATEGORY]
+            break
 
         if raw_fetched_count >= total_count:
             break
