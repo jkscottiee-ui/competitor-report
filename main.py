@@ -1,57 +1,74 @@
 """
-매주 월요일, 지정된 경쟁사들의 오늘의집 판매 현황(의자, 야외용 제외)을
-오늘의집 공식 상품 데이터 API로 직접 수집하고, 구글시트에 기록 + Slack에 요약을 전송하는 스크립트.
+매주, 사람이 오늘의집/네이버 브랜드별 "의자" 카테고리 화면을 캡처해서 구글 드라이브 "경쟁사분석_캡처"
+폴더에 올리면, n8n이 그 캡처를 읽어서 구글시트 "원본입력" 탭에 자동으로 기록한다. 이 스크립트는 그
+데이터를 직전 주 대비 비교(신규/가격변동/리뷰증가/판매중단 의심)한 뒤 "스냅샷" 탭에 기록하고 Slack에
+회사별 요약을 전송한다.
 
-- (2026-09-21 전면 개편) 이전 버전은 Claude API(web_fetch/web_search)로 페이지를 "읽고 추측"하는
-  방식이었는데, 실제로 돌려보니 (1) 무한스크롤 때문에 카테고리 전체 중 일부만 확인되고,
-  (2) URL/이미지가 거의 비어있고, (3) 브랜드별로 매번 다른(겹치지 않는) 상품 집합이 뽑히고,
-  (4) 상품명이 매번 조금씩 다르게 추출되어 "신규 상품" 판정이 사실상 무의미해지는 문제가 있었다.
-  이를 근본적으로 고치기 위해, 오늘의집이 화면을 그릴 때 실제로 사용하는 공식 데이터 API
-  (store.ohou.se/api/brands/{brandId}/products)를 브라우저로 직접 확인해서 찾아냈고,
-  이제 AI 추측 없이 이 API를 그대로 호출해서 100% 결정적이고 정확한 데이터를 가져온다.
-  상품 고유 ID를 기준으로 주차별 비교를 하기 때문에 "신규/가격변동/리뷰증가/판매중단 의심" 판정도
-  훨씬 신뢰할 수 있다.
-- (2026-09-22 403 차단 대응) GitHub Actions에서 돌렸더니 오늘의집 API가 403 Forbidden을 반환하는
-  문제가 발생했다. 같은 요청을 실제 브라우저(사용자 컴퓨터)에서 호출하면 지금도 정상(200)이라,
-  이건 요청 내용 자체보다는 "GitHub Actions 서버에서 오는 요청"이라는 점(IP/봇 패턴) 때문에
-  걸릴 가능성이 높다. 우선 시도해볼 수 있는 완화책으로 (1) 실제 브라우저가 보내는 것과 최대한
-  비슷한 Referer/Origin/Accept-Language 헤더 추가, (2) 요청 사이에 약간의 지연, (3) 403을
-  만나면 잠시 기다렸다가 재시도하는 로직을 추가했다. 다만 이게 GitHub Actions IP 자체를
-  막아놓은 것이라면 헤더만으로는 완전히 해결이 안 될 수도 있어서, 재시도 후에도 계속 403이면
-  실행 환경(예: 자체 러너)을 바꾸는 걸 고려해야 한다.
-- (2026-09-22 범위 축소) 우리 사업은 의자 중심이라 테이블류(테이블·식탁·책상)는 수집 대상에서
-  완전히 제외했다 (OHOU_CATEGORIES 참고). 또한 의자 중에서도 야외용(테라스/캠핑용 등)은
-  작업 대상이 아니라서 제외한다 — 다만 오늘의집 API 응답에는 상품별로 "이건 야외용" 이라고
-  명시하는 필드가 없다(개별 상품 raw JSON을 직접 열어서 확인함). 야외가구>야외의자
-  카테고리(10250003)는 애초에 의자(10210000) 카테고리와 별개라서 자동으로 빠지지만,
-  실제로는 인테리어의자/스툴·벤치 등 실내 카테고리로 분류되어 있으면서도 상품명에
-  "야외/테라스/캠핑/아웃도어/정원" 등이 들어간 상품이 소수 존재해서 이런 것들은 카테고리
-  필터만으로는 안 걸러진다. 그래서 OUTDOOR_NAME_KEYWORDS로 상품명 키워드 매칭을 추가해서
-  걸러낸다 (100% 완벽하지는 않은 휴리스틱이라, 실제 결과를 보고 키워드를 조정할 수 있다).
-- 쿠팡/네이버는 여전히 보류 상태 (ACTIVE_PLATFORMS 참고). 나중에 공식 API 연동 시 이 구조를
-  참고해서 별도의 결정적 수집 함수를 추가하면 된다 (AI 추측 방식으로는 돌아가지 않을 것).
-- (2026-09-26 테스트용 제한) 시트를 완전히 비우고 다시 검증하는 테스트라서, 카테고리당 상품을
-  전부 가져오지 않고 MAX_PRODUCTS_PER_CATEGORY(=10)개까지만 가져오도록 임시로 제한해뒀다.
-  실제 운영으로 넘어갈 때는 이 값을 None으로 바꾸면 된다.
-- "진짜 자료"는 구글시트(경쟁사 제품 스냅샷)에 상세 기록하고, Slack에는 회사별 요약 + 시트 링크만 전송
+- (2026-09-27 저녁, 최신) n8n v2 파이프라인과 맞춘 수정:
+  1) 쿠팡은 추적 대상에서 제외됨 → Slack 요약에서 "쿠팡: 캡처 데이터 없음"이 매주 뜨지 않도록
+     추적 플랫폼을 PLATFORMS = ("오늘의집", "네이버")로 한정.
+  2) 예전(오늘의집 API 시절) 형식으로 저장된 data/last_snapshot.json과 비교하면 첫 실행 때
+     "사라짐" 알림이 대량으로 뜨므로, 스냅샷에 형식 버전(SNAPSHOT_SCHEMA)을 붙이고 버전이 다른
+     예전 스냅샷은 무시한다 → 이번 실행이 새 기준선(baseline)이 된다.
+  3) "스냅샷" 탭 1행에 예전 16열 헤더(상품ID/판매상태/이미지 등)가 남아 있어서, 새 13열 헤더로
+     덮어쓸 때 뒤쪽 N~P열의 옛 헤더까지 깨끗이 지운다.
+  4) 날짜/수집시각을 한국 시간(Asia/Seoul) 기준으로 기록.
+  - 참고: n8n이 "원본입력" 탭에 추가하는 `_sourceFileName`(원본 캡처 파일명) 열은 이 스크립트가
+    열 이름으로 읽기 때문에 영향이 없다(그냥 무시됨). 처리 후 탭을 비울 때 함께 지워진다.
+
+- (2026-09-27 전면 개편 - 캡처+OCR 방식으로 통일)
+  오늘의집은 공식(비공식) 상품 데이터 API를 직접 호출하는 방식으로 전환했었는데(9/21),
+  GitHub Actions에서 실행하면 오늘의집 서버가 403 Forbidden으로 차단했다(9/22). Referer/Origin
+  헤더 위장, 요청 사이 지연, 403 발생 시 재시도/백오프까지 추가했지만 재검증 결과 여전히 403이
+  발생했다 — 즉 헤더 문제가 아니라 GitHub Actions IP 대역 자체를 막아놓았을 가능성이 높다는 뜻이다.
+  쿠팡은 애초에 Akamai Bot Manager(5중 탐지 - HTTP/TLS 핑거프린트, JS 센서, 브라우저 핑거프린팅,
+  행동 패턴 분석, IP 평판)로 막혀 있어 자동화 수집이 사실상 불가능했고, 네이버는 커머스API 팀이
+  "리뷰 관련 API는 가까운 시일 내 제공 계획이 없다"고 공식적으로 밝혀 애초에 API로는 리뷰수를
+  가져올 방법이 없었다.
+  결국 세 플랫폼 모두 "막히면 고치고, 또 막히면 또 고치는" 유지보수 비용이 계속 반복될 가능성이
+  크다고 판단해서, 세 플랫폼을 하나의 방식으로 통일하기로 했다: 사람이 매주 각 플랫폼의 브랜드별
+  의자 카테고리 화면을 캡처 → Claude가 그 캡처를 읽어서(OCR) 상품명/가격/리뷰수/평점을 추출 →
+  구글시트 "원본입력" 탭에 정리해서 붙여넣기 → 이 스크립트가 그 탭을 읽어서 정리/비교/기록/Slack
+  요약까지 처리한다.
+  이제 이 스크립트는 더 이상 오늘의집 API를 직접 호출하지 않는다. 세 플랫폼 모두 "원본입력" 탭에
+  이미 정리되어 들어온 데이터를 그대로 신뢰하고 처리만 한다.
+- 상품 고유 ID가 없다(캡처+OCR로는 안정적인 ID를 얻을 수 없음). 그래서 주차별 비교는
+  (플랫폼, 브랜드, 제품명) 조합을 키로 사용한다 — 제품명은 절대 일부만 잘라서 비교하지 않고
+  전체 문자열 그대로(공백만 다듬어서) 비교한다. "1+1 듀이 식탁 의자..."와 "듀이 식탁 의자..."처럼
+  거의 동일하지만 실제로는 다른 상품(1+1 구성 vs 단품)이 실제로 존재하는 걸 확인했기 때문에,
+  이름을 뭉뚱그리면 서로 다른 상품을 같은 상품으로 잘못 매칭하게 된다.
+  가격은 매칭 키에 넣지 않고 비교 대상 필드로만 쓴다 (그래야 가격이 바뀌어도 같은 상품으로 계속
+  추적되면서 "가격변동"으로 정확히 잡힌다).
+- 야외용(테라스/캠핑용 등) 상품이 실수로 캡처에 섞여 들어올 수 있어서, 기존에 쓰던
+  OUTDOOR_NAME_KEYWORDS 필터를 여기서도 안전망으로 그대로 적용한다.
+- "진짜 자료"는 구글시트(경쟁사 제품 스냅샷)에 상세 기록하고, Slack에는 회사별 요약 + 시트 링크만 전송.
+- 처리가 끝나면 "원본입력" 탭은 비워서, 다음 주에 새로 붙여넣을 때 지난주 데이터와 섞이지 않게 한다.
 
 필요한 환경변수:
 - SLACK_WEBHOOK_URL        : Slack Incoming Webhook URL
 - GOOGLE_SERVICE_ACCOUNT_JSON : 구글 서비스 계정 키(JSON) 전체 내용을 문자열로
 - GOOGLE_SHEET_ID          : "경쟁사 제품 스냅샷" 구글시트의 ID (URL의 /d/ 뒤 부분)
 - GOOGLE_SHEET_TAB_NAME    : (선택) 기록할 탭 이름, 기본값 "스냅샷"
+- GOOGLE_SHEET_RAW_TAB_NAME: (선택) 사람이 OCR 결과를 붙여넣는 원본 탭 이름, 기본값 "원본입력"
 
-(참고: 오늘의집 수집에는 더 이상 Anthropic API가 필요 없어져서 ANTHROPIC_API_KEY는 필수 목록에서
-빠졌다. 나중에 AI 요약/트렌드 분석 등에 다시 쓰게 되면 그때 추가하면 된다.)
+- (2026-09-27 추가) "원본입력" 탭에서 같은 (플랫폼, 브랜드, 제품명)이 중복으로 들어오면 첫 번째
+  것만 쓰고 나머지는 버린다 — 캡처 화면이 작아 여러 장으로 나눠 찍을 때 겹치는 구간에서 같은
+  상품이 두 번 잡히는 문제에 대한 대응이다.
+- (2026-09-27 아키텍처 결정) "캡처 → 이미지 읽기(추출) → 원본입력 탭 기록" 단계는 n8n으로
+  자동화하기로 함 (구글 드라이브 폴더에 캡처를 올리면 자동 시작 → n8n이 이미지를 읽어 데이터
+  추출 → 원본입력 탭에 기록). 이 스크립트(main.py)는 그 다음 단계(원본입력 → 비교/기록/Slack
+  요약)만 그대로 담당한다. 자세한 설계는 프로젝트 로드맵 문서 17번 섹션 참고.
+
+(참고: 이제 이 스크립트 자체는 웹사이트에 직접 접속하지 않으므로 봇 차단/헤더 위장 관련 코드가
+전혀 없다. "수집"은 사람(캡처) + n8n(이미지 읽기·시트 기록)이 담당하고, 이 스크립트는
+"비교/기록/알림"만 담당한다.)
 """
 
 import os
 import sys
 import json
-import re
-import time
-import random
 import datetime
+from zoneinfo import ZoneInfo
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
@@ -60,30 +77,52 @@ SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
 GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
 GOOGLE_SHEET_TAB_NAME = os.environ.get("GOOGLE_SHEET_TAB_NAME", "스냅샷")
+GOOGLE_SHEET_RAW_TAB_NAME = os.environ.get("GOOGLE_SHEET_RAW_TAB_NAME", "원본입력")
 
 SNAPSHOT_PATH = "data/last_snapshot.json"
+# 스냅샷 형식 버전 - 캡처+n8n 방식 데이터로 저장된 스냅샷에만 붙는다. 버전이 다르거나 없는
+# (예전 오늘의집 API 시절) 스냅샷은 비교에 쓰지 않고 무시한다.
+SNAPSHOT_SCHEMA = "capture-v1"
+SNAPSHOT_SCHEMA_KEY = "_schema"
 
-# (2026-09-26 테스트용) 시트를 깨끗하게 비우고 새로 검증하는 테스트라, 브랜드당 전체를 다
-# 긁어오지 않고 카테고리당 10개까지만 가져오도록 제한한다. 실제 운영에 들어가면 이 값을
-# None으로 바꿔서 제한을 풀면 된다.
-MAX_PRODUCTS_PER_CATEGORY = 10
+# 추적 플랫폼 (2026-09-27: 쿠팡 제외)
+PLATFORMS = ("오늘의집", "네이버")
 
-# 지금 결정적(deterministic)으로 수집 가능한 플랫폼만 여기 넣는다.
-# 쿠팡/네이버는 봇 차단 때문에 지금 방식(공식 API 없이)으로는 신뢰할 수 있는 수집이 안 되므로
-# 보류 상태. COMPANY_SOURCES에 정보는 남겨두되(나중에 재사용), 실제 수집은 건너뛴다.
-ACTIVE_PLATFORMS = {"오늘의집"}
+KST = ZoneInfo("Asia/Seoul")
 
-# 오늘의집 카테고리 ID (브라우저 개발자도구로 실제 API 요청을 확인해서 얻은 값들).
-# 우리 사업은 의자 중심이라 테이블류는 뺐다. 여기 추가하면 추적 범위를 늘릴 수 있다.
-OHOU_CATEGORIES = {
-    "의자": 10210000,
-}
+# "원본입력" 탭의 헤더 (사람/Claude가 캡처를 읽고 이 순서대로 채워서 붙여넣는다).
+# 날짜/수집시각은 비워둬도 되고(스크립트가 오늘 날짜로 채움), URL/비고는 선택 항목이다.
+RAW_INPUT_HEADERS = [
+    "플랫폼", "브랜드", "카테고리", "제품명", "정상가", "판매가", "리뷰수", "평점", "URL", "비고",
+]
 
-# 의자 카테고리 안에는 인테리어의자/스툴·벤치/안락의자/학생·사무용의자/바체어가 섞여 있는데,
-# 이 중 상품명에 아래 키워드가 들어간 상품은 "야외용"으로 보고 수집에서 제외한다.
-# (오늘의집 API 응답에는 상품별 "야외용 여부" 필드가 따로 없어서, 상품명 키워드로 판단하는
-# 방식이다 — 100% 정확하진 않을 수 있으니, 실제로 걸러진 목록을 보고 필요하면 조정하자.)
+# 우리 사업은 의자 중심이라, 캡처에 야외용(테라스/캠핑용 등) 상품이 섞여 들어와도
+# 상품명 키워드로 걸러낸다 (100% 완벽하지 않은 휴리스틱 — 필요하면 조정).
 OUTDOOR_NAME_KEYWORDS = ["야외", "아웃도어", "테라스", "캠핑", "정원"]
+
+# 각 회사가 입점한 플랫폼 목록 (참고용 - 어느 회사/플랫폼을 매주 캡처해야 하는지 확인할 때 씀).
+# 실제 수집 대상 제한은 캡처를 어디까지 하느냐로 결정되고, 이 스크립트는 "원본입력" 탭에 들어온
+# 것만 처리한다.
+ACTIVE_COMPANIES = {"폴인퍼니", "영가구"}
+
+COMPANY_SOURCES = {
+    "폴인퍼니": {
+        "오늘의집": "store.ohou.se/brands/13004",
+        "네이버": "brand.naver.com/fallinfuni",
+    },
+    "영가구": {
+        "오늘의집": "store.ohou.se/brands/3554",
+        "네이버": "brand.naver.com/younggagu",
+    },
+    "에이비퍼니쳐": {
+        "오늘의집": "store.ohou.se/brands/6360",
+        "네이버": "brand.naver.com/abfurniture",
+    },
+    "위드퍼니처": {
+        "오늘의집": "store.ohou.se/brands/1061",
+        "네이버": "smartstore.naver.com/withfurniture",
+    },
+}
 
 
 def _is_outdoor_product(name: str) -> bool:
@@ -91,57 +130,34 @@ def _is_outdoor_product(name: str) -> bool:
         return False
     return any(keyword in name for keyword in OUTDOOR_NAME_KEYWORDS)
 
-# (2026-09-22) 우선 폴인퍼니/영가구 2곳만 테스트로 돌려본다. 나머지 회사는 COMPANY_SOURCES에
-# 그대로 남겨두고(재사용 위해), 실제 수집 대상만 이 집합으로 제한한다. 테스트가 끝나고 전체로
-# 넓히고 싶으면 이 줄만 ACTIVE_COMPANIES = set(COMPANY_SOURCES) 로 바꾸면 된다.
-ACTIVE_COMPANIES = {"폴인퍼니", "영가구"}
 
-# 각 회사가 입점한 플랫폼 목록 (플랫폼 이름 + 브랜드 스토어 주소)
-COMPANY_SOURCES = {
-    "폴인퍼니": {
-        "오늘의집": "store.ohou.se/brands/13004",
-        "쿠팡": "shop.coupang.com/fallinfuni",
-        "네이버": "brand.naver.com/fallinfuni",
-    },
-    "영가구": {
-        "오늘의집": "store.ohou.se/brands/3554",
-        "쿠팡": "shop.coupang.com/younggagu",
-        "네이버": "brand.naver.com/younggagu",
-    },
-    "에이비퍼니쳐": {
-        "오늘의집": "store.ohou.se/brands/6360",
-        "쿠팡": "shop.coupang.com/abfurniture",
-        "네이버": "brand.naver.com/abfurniture",
-    },
-    "위드퍼니처": {
-        "오늘의집": "store.ohou.se/brands/1061",
-        "쿠팡": "shop.coupang.com/A00061777",
-        "네이버": "smartstore.naver.com/withfurniture",
-    },
-}
-
-# 실제 브라우저가 이 API를 부를 때 함께 보내는 헤더들을 최대한 비슷하게 흉내낸다.
-# (Referer/Origin은 브랜드별로 달라져서 요청 시점에 채워 넣는다 - _build_request_headers 참고)
-REQUEST_HEADERS = {
-    "Accept": "application/json",
-    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Origin": "https://store.ohou.se",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-}
-
-# 403(차단)을 만났을 때 재시도 설정 - GitHub Actions처럼 브라우저가 아닌 환경에서 오는 요청을
-# 오늘의집 쪽에서 일시적으로 더 엄격하게 걸러낼 수 있어서, 약간 쉬었다가 다시 시도해본다.
-MAX_RETRIES_ON_BLOCK = 3
-RETRY_BACKOFF_SECONDS = [3, 8, 15]
+def _clean_name(name: str) -> str:
+    """제품명 비교용 키를 만든다 - 앞뒤/중복 공백만 다듬고, 나머지(특히 "1+1" 같은 접미사)는
+    절대 잘라내지 않는다. 이름을 뭉뚱그리면 서로 다른 상품을 같은 상품으로 잘못 매칭한다."""
+    if not name:
+        return ""
+    return " ".join(name.strip().split())
 
 
-def _build_request_headers(brand_id: int, category_id: int) -> dict:
-    """실제 브라우저에서 이 API를 호출할 때 함께 실리는 Referer(예: 브랜드 페이지에서
-    카테고리를 클릭해서 들어온 상태)를 최대한 똑같이 흉내낸 헤더를 만든다."""
-    headers = dict(REQUEST_HEADERS)
-    headers["Referer"] = f"https://store.ohou.se/brands/{brand_id}?categoryId={category_id}"
-    return headers
+def _parse_number(value):
+    """'23,400원', '4.9', '' 같은 문자열에서 숫자만 뽑아낸다. 못 뽑으면 None."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    text = text.replace(",", "").replace("원", "").replace("개", "").strip()
+    try:
+        if "." in text:
+            return float(text)
+        return int(text)
+    except ValueError:
+        try:
+            return float(text)
+        except ValueError:
+            return None
 
 
 def check_env():
@@ -158,155 +174,129 @@ def check_env():
         sys.exit(1)
 
 
-def _extract_ohou_brand_id(store_hint: str):
-    """store.ohou.se/brands/3554 같은 문자열에서 브랜드ID(숫자)만 뽑아낸다."""
-    match = re.search(r"brands/(\d+)", store_hint)
-    return int(match.group(1)) if match else None
+def get_spreadsheet():
+    info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_info(info, scopes=scopes)
+    client = gspread.authorize(creds)
+    return client.open_by_key(GOOGLE_SHEET_ID)
 
 
-def fetch_ohou_category_products(brand_id: int, category_id: int, category_label: str) -> list:
-    """오늘의집이 실제로 화면을 그릴 때 쓰는 공식 상품 데이터 API를 그대로 호출해서
-    해당 브랜드 + 카테고리의 상품을 전체 페이지네이션으로 모두 가져온다.
-    AI 추측이 전혀 없는 결정적(deterministic) 수집이라 매번 같은 조건이면 같은 결과가 나온다."""
-    products = []
-    raw_fetched_count = 0  # 필터링 전, API가 실제로 내려준 원본 상품 개수(페이지네이션 종료 판단용)
-    outdoor_excluded_count = 0
-    page = 1
-    total_count = None
-    headers = _build_request_headers(brand_id, category_id)
-    while True:
-        url = (
-            f"https://store.ohou.se/api/brands/{brand_id}/products"
-            f"?brandId={brand_id}&page={page}&order=popular&filterQuery=categoryId%3D{category_id}"
-        )
-
-        data = None
-        for attempt in range(MAX_RETRIES_ON_BLOCK + 1):
-            try:
-                resp = requests.get(url, headers=headers, timeout=20)
-                if resp.status_code == 403 and attempt < MAX_RETRIES_ON_BLOCK:
-                    wait_s = RETRY_BACKOFF_SECONDS[min(attempt, len(RETRY_BACKOFF_SECONDS) - 1)]
-                    print(f"    [경고] 403(차단 추정) - {wait_s}초 대기 후 재시도 "
-                          f"({attempt + 1}/{MAX_RETRIES_ON_BLOCK}) (brand={brand_id}, category={category_label}, page={page})")
-                    time.sleep(wait_s)
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
-                break
-            except Exception as e:
-                if attempt < MAX_RETRIES_ON_BLOCK:
-                    wait_s = RETRY_BACKOFF_SECONDS[min(attempt, len(RETRY_BACKOFF_SECONDS) - 1)]
-                    print(f"    [경고] 오늘의집 API 호출 실패, {wait_s}초 대기 후 재시도 "
-                          f"({attempt + 1}/{MAX_RETRIES_ON_BLOCK}) (brand={brand_id}, category={category_label}, page={page}): {e}")
-                    time.sleep(wait_s)
-                    continue
-                print(f"    [오류] 오늘의집 API 호출 최종 실패 (brand={brand_id}, category={category_label}, page={page}): {e}")
-
-        if data is None:
-            break
-
-        # 요청 사이에 짧게 쉬어서 너무 기계적인(봇처럼 보이는) 연속 호출 패턴을 피한다.
-        time.sleep(random.uniform(0.4, 1.0))
-
-        page_products = data.get("products", [])
-        if total_count is None:
-            total_count = data.get("totalCount", 0)
-        if not page_products:
-            break
-        raw_fetched_count += len(page_products)
-
-        for p in page_products:
-            if p.get("isHidden"):
-                continue
-            if _is_outdoor_product(p.get("name")):
-                outdoor_excluded_count += 1
-                continue
-            price_info = p.get("price") or {}
-            selling_price = p.get("sellingPrice")
-            if selling_price is None:
-                selling_price = price_info.get("sellingPrice")
-            regular_price = p.get("originalPrice")
-            if regular_price is None:
-                regular_price = price_info.get("regularPrice")
-            product_id = p.get("id")
-            products.append({
-                "product_id": product_id,
-                "name": p.get("name"),
-                "category": category_label,
-                "selling_price": selling_price,
-                "regular_price": regular_price,
-                "review_count": p.get("reviewCount"),
-                "rating": p.get("reviewAvg"),
-                "image_url": p.get("resizedImageUrl") or p.get("imageUrl"),
-                "url": f"https://store.ohou.se/goods/{product_id}" if product_id else None,
-                "is_sold_out": bool(p.get("isSoldOut")),
-                "is_selling": p.get("isSelling", True),
-            })
-
-        if MAX_PRODUCTS_PER_CATEGORY is not None and len(products) >= MAX_PRODUCTS_PER_CATEGORY:
-            products = products[:MAX_PRODUCTS_PER_CATEGORY]
-            break
-
-        if raw_fetched_count >= total_count:
-            break
-        page += 1
-        if page > 60:  # 안전장치: 혹시 모를 무한루프 방지
-            print(f"    [경고] 페이지가 60을 넘어가서 중단함 (brand={brand_id}, category={category_label})")
-            break
-
-    if outdoor_excluded_count:
-        print(f"    - {category_label}: 야외용 추정 {outdoor_excluded_count}개 제외함")
-
-    return products
-
-
-def get_ohou_products_for_company(store_hint: str) -> list:
-    """한 회사의 오늘의집 전체 상품(등록된 모든 카테고리 합산)을 가져온다."""
-    brand_id = _extract_ohou_brand_id(store_hint)
-    if brand_id is None:
-        print(f"    [오류] 오늘의집 브랜드ID를 찾을 수 없음: {store_hint}")
+def read_raw_input_rows(spreadsheet) -> list:
+    """'원본입력' 탭에서 사람이 캡처+OCR로 정리해 붙여넣은 데이터를 읽어온다.
+    (플랫폼, 브랜드, 제품명)이 비어있는 행은 무시한다."""
+    try:
+        worksheet = spreadsheet.worksheet(GOOGLE_SHEET_RAW_TAB_NAME)
+    except gspread.exceptions.WorksheetNotFound:
+        print(f"[오류] '{GOOGLE_SHEET_RAW_TAB_NAME}' 탭을 찾을 수 없습니다. "
+              f"먼저 이 탭을 만들고 헤더를 {RAW_INPUT_HEADERS} 순서로 넣어주세요.")
         return []
 
-    all_products = []
-    for label, category_id in OHOU_CATEGORIES.items():
-        cat_products = fetch_ohou_category_products(brand_id, category_id, label)
-        print(f"    - {label}: {len(cat_products)}개 확인")
-        all_products.extend(cat_products)
-    return all_products
+    records = worksheet.get_all_records()  # 1행을 헤더로 보고 딕셔너리 리스트로 반환
+    rows = []
+    outdoor_excluded_count = 0
+    duplicate_excluded_count = 0
+    seen_keys = set()  # (플랫폼, 브랜드, 제품명) - 캡처 구간이 겹쳐서 같은 상품이 여러 번 들어온 경우 제거
+    for r in records:
+        platform = str(r.get("플랫폼", "")).strip()
+        brand = str(r.get("브랜드", "")).strip()
+        name = _clean_name(str(r.get("제품명", "")))
+        if not platform or not brand or not name:
+            continue
+        if _is_outdoor_product(name):
+            outdoor_excluded_count += 1
+            continue
+        key = (platform, brand, name)
+        if key in seen_keys:
+            duplicate_excluded_count += 1
+            continue
+        seen_keys.add(key)
+        rows.append({
+            "platform": platform,
+            "company": brand,
+            "category": str(r.get("카테고리", "")).strip() or "의자",
+            "name": name,
+            "regular_price": _parse_number(r.get("정상가")),
+            "selling_price": _parse_number(r.get("판매가")),
+            "review_count": _parse_number(r.get("리뷰수")),
+            "rating": _parse_number(r.get("평점")),
+            "url": str(r.get("URL", "")).strip() or None,
+            "note": str(r.get("비고", "")).strip(),
+        })
+
+    if outdoor_excluded_count:
+        print(f"[안내] 원본입력에서 야외용 추정 {outdoor_excluded_count}개 제외함")
+    if duplicate_excluded_count:
+        print(f"[안내] 원본입력에서 중복(캡처 구간 겹침 추정) {duplicate_excluded_count}개 제외함 "
+              f"(같은 플랫폼+브랜드+제품명이 여러 번 나타나면 첫 번째 것만 사용)")
+
+    return rows
+
+
+def clear_raw_input_tab(spreadsheet):
+    """처리 완료 후 '원본입력' 탭을 비워서(헤더는 남김) 다음 주 붙여넣기와 안 섞이게 한다."""
+    try:
+        worksheet = spreadsheet.worksheet(GOOGLE_SHEET_RAW_TAB_NAME)
+    except gspread.exceptions.WorksheetNotFound:
+        return
+    all_values = worksheet.get_all_values()
+    if len(all_values) <= 1:
+        return  # 헤더밖에 없으면 지울 것도 없음
+    worksheet.batch_clear([f"A2:Z{len(all_values)}"])
+
+
+def group_by_company_and_platform(raw_rows: list) -> dict:
+    """[{platform, company, name, ...}, ...] 리스트를 {회사: {플랫폼: [상품, ...]}} 형태로 묶는다."""
+    grouped = {}
+    for row in raw_rows:
+        company = row["company"]
+        platform = row["platform"]
+        grouped.setdefault(company, {}).setdefault(platform, []).append(row)
+    return grouped
 
 
 def load_snapshot() -> dict:
     try:
         with open(SNAPSHOT_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
+    if not isinstance(data, dict) or data.get(SNAPSHOT_SCHEMA_KEY) != SNAPSHOT_SCHEMA:
+        print("[안내] 지난 스냅샷이 예전 형식이라 비교에 쓰지 않습니다. "
+              "이번 실행 결과가 새 비교 기준(첫 주)이 됩니다.")
+        return {}
+    data = dict(data)
+    data.pop(SNAPSHOT_SCHEMA_KEY, None)
+    return data
 
 
 def save_snapshot(snapshot: dict):
     os.makedirs(os.path.dirname(SNAPSHOT_PATH), exist_ok=True)
+    data = {SNAPSHOT_SCHEMA_KEY: SNAPSHOT_SCHEMA}
+    data.update(snapshot)
     with open(SNAPSHOT_PATH, "w", encoding="utf-8") as f:
-        json.dump(snapshot, f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 def annotate_products(prev_by_platform: dict, curr_by_platform: dict) -> tuple:
-    """상품 고유 ID를 기준으로 지난주 데이터와 비교해서 각 상품에 '_status'/'_note'를 붙이고,
-    전체 변화 요약 리스트도 함께 반환한다. (이름이 아니라 ID로 비교하므로, 상품명 표기가 살짝
-    달라져도 같은 상품으로 정확히 인식된다 — 이전 버전의 핵심 버그였던 부분.)"""
+    """(플랫폼, 제품명) 조합을 키로 지난주 데이터와 비교해서 각 상품에 '_status'/'_note'를 붙이고,
+    전체 변화 요약 리스트도 함께 반환한다.
+    상품 고유 ID가 없는 캡처+OCR 데이터라서, 제품명 전체 문자열을 키로 쓴다 — "1+1" 같은 접미사도
+    그대로 유지해야 실제로 다른 상품끼리 잘못 합쳐지지 않는다."""
     changes = []
     for platform, curr_products in curr_by_platform.items():
         prev_products = prev_by_platform.get(platform, [])
-        prev_by_id = {p.get("product_id"): p for p in prev_products if p.get("product_id") is not None}
-        curr_ids = set()
+        prev_by_name = {_clean_name(p.get("name")): p for p in prev_products if p.get("name")}
+        curr_names = set()
 
         for p in curr_products:
-            pid = p.get("product_id")
+            key = _clean_name(p.get("name"))
             p["_status"] = ""
             p["_note"] = ""
-            if pid is None:
+            if not key:
                 continue
-            curr_ids.add(pid)
-            prev = prev_by_id.get(pid)
+            curr_names.add(key)
+            prev = prev_by_name.get(key)
 
             if prev is None:
                 p["_status"] = "신규"
@@ -319,8 +309,8 @@ def annotate_products(prev_by_platform: dict, curr_by_platform: dict) -> tuple:
                 delta = curr_reviews - prev_reviews
                 if delta > 0:
                     p["_status"] = "리뷰증가"
-                    notes.append(f"리뷰 {prev_reviews}→{curr_reviews} (+{delta})")
-                    changes.append(f"📈 리뷰 증가 [{platform}]: {p.get('name')} ({prev_reviews}→{curr_reviews}, +{delta})")
+                    notes.append(f"리뷰 {prev_reviews:,.0f}→{curr_reviews:,.0f} (+{delta:,.0f})")
+                    changes.append(f"📈 리뷰 증가 [{platform}]: {p.get('name')} ({prev_reviews:,.0f}→{curr_reviews:,.0f}, +{delta:,.0f})")
 
             prev_price, curr_price = prev.get("selling_price"), p.get("selling_price")
             if isinstance(prev_price, (int, float)) and isinstance(curr_price, (int, float)) and prev_price != curr_price:
@@ -329,79 +319,71 @@ def annotate_products(prev_by_platform: dict, curr_by_platform: dict) -> tuple:
                 notes.append(f"{prev_price:,.0f}원→{curr_price:,.0f}원")
                 changes.append(f"{arrow} 가격 변동 [{platform}]: {p.get('name')} ({prev_price:,.0f}원→{curr_price:,.0f}원)")
 
-            if p.get("is_sold_out") and not prev.get("is_sold_out"):
-                p["_status"] = "품절"
-                notes.append("품절 전환")
-                changes.append(f"⚠️ 품절 전환 [{platform}]: {p.get('name')}")
-
             p["_note"] = " / ".join(notes)
 
-        # 지난주엔 있었는데 이번주 목록에서 통째로 사라진 상품 = 판매중단 의심
-        # (데이터가 이제 결정적/완전하기 때문에, 이 신호를 처음으로 신뢰할 수 있다.)
-        for pid, prev in prev_by_id.items():
-            if pid not in curr_ids:
-                changes.append(f"🛑 목록에서 사라짐(판매중단 의심) [{platform}]: {prev.get('name')}")
+        # 지난주엔 있었는데 이번 주 캡처에서 통째로 사라진 상품 = 판매중단 의심
+        # (다만 캡처+OCR 특성상, 화면을 일부만 캡처했으면 실제로는 팔리고 있는데 이번엔 캡처 범위
+        # 밖이라 안 잡혔을 수도 있다 — 100% 확정이 아니라 "의심" 신호로만 취급한다.)
+        for key, prev in prev_by_name.items():
+            if key not in curr_names:
+                changes.append(f"🛑 목록에서 사라짐(판매중단 또는 미캡처 의심) [{platform}]: {prev.get('name')}")
 
     return curr_by_platform, changes
 
 
-def get_sheet_worksheet():
-    """GOOGLE_SERVICE_ACCOUNT_JSON / GOOGLE_SHEET_ID 환경변수로 시트에 접근한다."""
-    info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_info(info, scopes=scopes)
-    client = gspread.authorize(creds)
-    spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
+def get_snapshot_worksheet(spreadsheet):
     return spreadsheet.worksheet(GOOGLE_SHEET_TAB_NAME)
 
 
-# 시트 열 순서 (QA를 위해 상품ID/정상가/판매가/판매상태 등을 추가했다)
+# 시트 열 순서 (상품ID가 없어서 뺐고, 판매상태도 OCR로는 확실히 알 수 없어서 뺐다 -
+# 품절 여부를 표시하고 싶으면 '원본입력' 탭의 "비고"에 사람이 적으면 그게 그대로 비고에 실린다).
 SHEET_HEADERS = [
-    "날짜", "수집시각", "플랫폼", "브랜드", "카테고리", "상품ID", "제품명",
-    "정상가", "판매가", "리뷰수", "평점", "판매상태", "상태", "비고", "URL", "이미지",
+    "날짜", "수집시각", "플랫폼", "브랜드", "카테고리", "제품명",
+    "정상가", "판매가", "리뷰수", "평점", "상태", "비고", "URL",
 ]
 
 
 def ensure_sheet_headers(worksheet):
-    """시트 1행이 기대하는 헤더와 다르면 덮어써서 맞춰둔다."""
+    """시트 1행이 기대하는 헤더와 다르면 덮어써서 맞춰둔다.
+    예전 16열 헤더가 남아 있으면 13열만 덮어써도 N열 이후에 옛 헤더가 남으므로, 1행 전체를
+    새 헤더 + 빈 칸으로 덮어쓴다."""
     try:
         first_row = worksheet.row_values(1)
     except Exception:
         first_row = []
     if first_row != SHEET_HEADERS:
-        worksheet.update("A1", [SHEET_HEADERS])
+        width = max(len(SHEET_HEADERS), len(first_row))
+        padded = SHEET_HEADERS + [""] * (width - len(SHEET_HEADERS))
+        worksheet.update("A1", [padded])
 
 
 def append_products_to_sheet(worksheet, company: str, by_platform: dict, today: str, now_str: str):
     rows = []
     for platform, products in by_platform.items():
         if not products:
-            status = "조사 실패" if platform in ACTIVE_PLATFORMS else "추후 지원 예정(공식 API 연동 전)"
             rows.append([
-                today, now_str, platform, company, "", "", "(상품 없음)",
-                "", "", "", "", "", status, "", "", "",
+                today, now_str, platform, company, "", "(상품 없음 - 이번 주 캡처 안 됨)",
+                "", "", "", "", "", "", "",
             ])
             continue
         for p in products:
-            image_formula = f'=IMAGE("{p["image_url"]}", 4, 60, 60)' if p.get("image_url") else ""
-            sale_status = "품절" if p.get("is_sold_out") else ("판매중" if p.get("is_selling", True) else "판매중단")
+            note = p.get("_note", "")
+            if p.get("note"):
+                note = f"{note} / {p['note']}" if note else p["note"]
             rows.append([
                 today,
                 now_str,
                 platform,
                 company,
                 p.get("category", ""),
-                p.get("product_id") or "",
                 p.get("name", ""),
                 p.get("regular_price") if p.get("regular_price") is not None else "",
                 p.get("selling_price") if p.get("selling_price") is not None else "",
                 p.get("review_count") if p.get("review_count") is not None else "",
                 p.get("rating") if p.get("rating") is not None else "",
-                sale_status,
                 p.get("_status", ""),
-                p.get("_note", ""),
+                note,
                 p.get("url") or "",
-                image_formula,
             ])
     if rows:
         worksheet.append_rows(rows, value_input_option="USER_ENTERED")
@@ -410,15 +392,14 @@ def append_products_to_sheet(worksheet, company: str, by_platform: dict, today: 
 def build_company_summary_text(company: str, by_platform: dict, changes: list, sheet_url: str) -> str:
     """Slack에는 회사별 요약(플랫폼별 발견 개수 + 변화 유무)과 시트 링크만 전송한다."""
     lines = [f"*:mag: {company} 주간 판매 동향 요약*"]
-    for platform, products in by_platform.items():
+    for platform in PLATFORMS:
+        products = by_platform.get(platform, [])
         if products:
             lines.append(f"  • {platform}: {len(products)}개 상품 확인")
-        elif platform not in ACTIVE_PLATFORMS:
-            lines.append(f"  • {platform}: 아직 미지원 (추후 공식 API 연동 예정)")
         else:
-            lines.append(f"  • {platform}: 상품 없음")
+            lines.append(f"  • {platform}: 이번 주 캡처 데이터 없음")
     if changes:
-        lines.append(f"  ⚡ 변화 {len(changes)}건 감지 (신규/가격변동/리뷰증가/품절/판매중단 의심)")
+        lines.append(f"  ⚡ 변화 {len(changes)}건 감지 (신규/가격변동/리뷰증가/판매중단 의심)")
     else:
         lines.append("  변화 없음")
     lines.append(f"상세 데이터: {sheet_url}")
@@ -433,37 +414,33 @@ def send_text_to_slack(text: str):
 def main():
     check_env()
     prev_snapshot = load_snapshot()
-    # 이번에 건너뛴 회사(ACTIVE_COMPANIES에 없는 회사)의 지난 스냅샷은 그대로 유지해둔다.
-    # 나중에 다시 활성화했을 때, 원래 있던 상품들이 전부 "신규"로 잘못 뜨는 걸 방지하기 위함.
-    new_snapshot = dict(prev_snapshot)
-    now = datetime.datetime.now()
+    now = datetime.datetime.now(KST)
     today = now.strftime("%Y-%m-%d")
     now_str = now.strftime("%Y-%m-%d %H:%M:%S")
     sheet_url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/edit"
 
+    spreadsheet = get_spreadsheet()
+    raw_rows = read_raw_input_rows(spreadsheet)
+    if not raw_rows:
+        print(f"[안내] '{GOOGLE_SHEET_RAW_TAB_NAME}' 탭에 처리할 데이터가 없습니다. "
+              f"캡처+OCR 결과를 먼저 붙여넣어주세요.")
+        return
+
+    grouped = group_by_company_and_platform(raw_rows)
+
     worksheet = None
     try:
-        worksheet = get_sheet_worksheet()
+        worksheet = get_snapshot_worksheet(spreadsheet)
         ensure_sheet_headers(worksheet)
     except Exception as e:
-        print(f"[오류] 구글시트 연결 실패 (시트 기록은 건너뜁니다): {e}")
+        print(f"[오류] '{GOOGLE_SHEET_TAB_NAME}' 시트 연결 실패 (시트 기록은 건너뜁니다): {e}")
 
-    for company, platforms in COMPANY_SOURCES.items():
-        if company not in ACTIVE_COMPANIES:
-            print(f"건너뜀 (테스트 대상 아님): {company}")
-            continue
-        print(f"조사 중: {company}")
-        by_platform = {}
-        for platform, store_hint in platforms.items():
-            if platform not in ACTIVE_PLATFORMS:
-                print(f"  - {platform}: 아직 연동 안 됨 (건너뜀)")
-                by_platform[platform] = []
-                continue
-            print(f"  - {platform} 수집 중...")
-            if platform == "오늘의집":
-                by_platform[platform] = get_ohou_products_for_company(store_hint)
-            else:
-                by_platform[platform] = []
+    # 이번 주에 데이터가 없는 회사(캡처를 안 한 회사)의 지난 스냅샷은 그대로 유지해둔다.
+    new_snapshot = dict(prev_snapshot)
+
+    for company in grouped:
+        print(f"처리 중: {company}")
+        by_platform = grouped[company]
 
         prev_by_platform = prev_snapshot.get(company, {})
         if not isinstance(prev_by_platform, dict):
@@ -483,6 +460,12 @@ def main():
         print(f"  → '{company}' Slack 요약 전송 완료")
 
     save_snapshot(new_snapshot)
+
+    try:
+        clear_raw_input_tab(spreadsheet)
+        print(f"[안내] '{GOOGLE_SHEET_RAW_TAB_NAME}' 탭을 비웠습니다 (다음 주 붙여넣기 준비 완료).")
+    except Exception as e:
+        print(f"[오류] '{GOOGLE_SHEET_RAW_TAB_NAME}' 탭 비우기 실패 (수동으로 비워주세요): {e}")
 
 
 if __name__ == "__main__":
