@@ -4,7 +4,17 @@
 데이터를 직전 주 대비 비교(신규/가격변동/리뷰증가/판매중단 의심)한 뒤 "스냅샷" 탭에 기록하고 Slack에
 회사별 요약을 전송한다.
 
-- (2026-09-27 저녁, 최신) n8n v2 파이프라인과 맞춘 수정:
+- (2026-09-29, 최신) 스크랩수·배송비 열 추가:
+  "원본입력"과 "스냅샷" 탭에 `스크랩수`, `배송비별도`(Y=고객 부담[별도·유료·착불] / N=무료배송 /
+  빈칸=화면에 표시 없음), `배송비`(원, 화면에 금액이 보일 때만; 무료배송은 0) 열을 추가했다.
+  "스냅샷" 탭은 예전 행이 밀리지 않도록 새 열을 맨 뒤(N~P열)에 붙인다.
+  비교 신호에 "스크랩 증가"(리뷰 없는 신상품의 관심도 신호)와 "배송 조건 변경"을 추가했다.
+  이전 주 데이터(시트·last_snapshot.json)에는 이 값들이 "비고" 문장 안에만 들어 있으므로, 비고에서
+  "스크랩 86", "배송비 10000원", "착불 22000원", "배송비 별도", "무료배송"을 찾아 채워 넣는다
+  (backfill_snapshot_sheet — 빈 칸만 채우므로 여러 번 실행해도 안전). 리뷰 없이 스크랩 수만 보이던
+  예전 행은 n8n v4 규칙에 맞춰 리뷰수·평점을 0으로 채운다.
+
+- (2026-09-27 저녁) n8n v2 파이프라인과 맞춘 수정:
   1) 쿠팡은 추적 대상에서 제외됨 → Slack 요약에서 "쿠팡: 캡처 데이터 없음"이 매주 뜨지 않도록
      추적 플랫폼을 PLATFORMS = ("오늘의집", "네이버")로 한정.
   2) 예전(오늘의집 API 시절) 형식으로 저장된 data/last_snapshot.json과 비교하면 첫 실행 때
@@ -65,6 +75,7 @@
 """
 
 import os
+import re
 import sys
 import json
 import datetime
@@ -94,6 +105,7 @@ KST = ZoneInfo("Asia/Seoul")
 # 날짜/수집시각은 비워둬도 되고(스크립트가 오늘 날짜로 채움), URL/비고는 선택 항목이다.
 RAW_INPUT_HEADERS = [
     "플랫폼", "브랜드", "카테고리", "제품명", "정상가", "판매가", "리뷰수", "평점", "URL", "비고",
+    "스크랩수", "배송비별도", "배송비",
 ]
 
 # 우리 사업은 의자 중심이라, 캡처에 야외용(테라스/캠핑용 등) 상품이 섞여 들어와도
@@ -123,6 +135,53 @@ COMPANY_SOURCES = {
         "네이버": "smartstore.naver.com/withfurniture",
     },
 }
+
+
+_SCRAP_RE = re.compile(r"스크랩\s*([\d,]+)")
+_FEE_RE = re.compile(r"(?:배송비|착불)\s*([\d,]+)\s*원")
+
+
+def _parse_shipping_flag(value) -> str:
+    """배송비별도 값을 'Y' / 'N' / ''로 통일한다."""
+    text = str(value if value is not None else "").strip().upper()
+    if text in ("Y", "YES", "예", "별도", "유료", "착불", "TRUE"):
+        return "Y"
+    if text in ("N", "NO", "아니오", "무료", "무료배송", "FALSE"):
+        return "N"
+    return ""
+
+
+def derive_extras_from_note(note: str) -> dict:
+    """'비고' 문장에서 스크랩수 / 배송비별도 / 배송비를 뽑는다. 못 찾으면 빈 값.
+    '7000원 쿠폰'처럼 배송비가 아닌 금액은 '배송비'/'착불' 바로 뒤의 금액만 인정해서 피한다."""
+    note = note or ""
+    out = {"scrap_count": None, "shipping_separate": "", "shipping_fee": None}
+    m = _SCRAP_RE.search(note)
+    if m:
+        out["scrap_count"] = _parse_number(m.group(1))
+    if "무료배송" in note or "무료 배송" in note:
+        out["shipping_separate"] = "N"
+        out["shipping_fee"] = 0
+    else:
+        m = _FEE_RE.search(note)
+        if m:
+            out["shipping_separate"] = "Y"
+            out["shipping_fee"] = _parse_number(m.group(1))
+        elif "배송비 별도" in note or "배송비별도" in note or "착불" in note:
+            out["shipping_separate"] = "Y"
+    return out
+
+
+def fill_missing_extras(p: dict) -> dict:
+    """스크랩수/배송비 필드가 비어 있으면 비고에서 채운다 (이전 주 데이터 호환용)."""
+    derived = derive_extras_from_note(p.get("note", ""))
+    if p.get("scrap_count") is None:
+        p["scrap_count"] = derived["scrap_count"]
+    if not p.get("shipping_separate"):
+        p["shipping_separate"] = derived["shipping_separate"]
+    if p.get("shipping_fee") is None:
+        p["shipping_fee"] = derived["shipping_fee"]
+    return p
 
 
 def _is_outdoor_product(name: str) -> bool:
@@ -222,7 +281,11 @@ def read_raw_input_rows(spreadsheet) -> list:
             "rating": _parse_number(r.get("평점")),
             "url": str(r.get("URL", "")).strip() or None,
             "note": str(r.get("비고", "")).strip(),
+            "scrap_count": _parse_number(r.get("스크랩수")),
+            "shipping_separate": _parse_shipping_flag(r.get("배송비별도")),
+            "shipping_fee": _parse_number(r.get("배송비")),
         })
+        fill_missing_extras(rows[-1])
 
     if outdoor_excluded_count:
         print(f"[안내] 원본입력에서 야외용 추정 {outdoor_excluded_count}개 제외함")
@@ -303,6 +366,7 @@ def annotate_products(prev_by_platform: dict, curr_by_platform: dict) -> tuple:
                 changes.append(f"🆕 신규 상품 [{platform}]: {p.get('name')} ({p.get('category')})")
                 continue
 
+            fill_missing_extras(prev)  # 이전 주 데이터엔 스크랩/배송비가 비고 문장에만 있을 수 있음
             notes = []
             prev_reviews, curr_reviews = prev.get("review_count"), p.get("review_count")
             if isinstance(prev_reviews, (int, float)) and isinstance(curr_reviews, (int, float)):
@@ -318,6 +382,26 @@ def annotate_products(prev_by_platform: dict, curr_by_platform: dict) -> tuple:
                 p["_status"] = "가격변동"
                 notes.append(f"{prev_price:,.0f}원→{curr_price:,.0f}원")
                 changes.append(f"{arrow} 가격 변동 [{platform}]: {p.get('name')} ({prev_price:,.0f}원→{curr_price:,.0f}원)")
+
+            # 스크랩 증가: 리뷰가 아직 없는 신상품의 관심도 신호 (주의: '스크랩수'로 적어야 비고에서
+            # 스크랩 수를 다시 뽑을 때 이 비교 문구가 잘못 걸리지 않는다)
+            prev_scrap, curr_scrap = prev.get("scrap_count"), p.get("scrap_count")
+            if isinstance(prev_scrap, (int, float)) and isinstance(curr_scrap, (int, float)):
+                delta = curr_scrap - prev_scrap
+                if delta > 0:
+                    if not p["_status"]:
+                        p["_status"] = "스크랩증가"
+                    notes.append(f"스크랩수 {prev_scrap:,.0f}→{curr_scrap:,.0f} (+{delta:,.0f})")
+                    changes.append(f"🔖 스크랩 증가 [{platform}]: {p.get('name')} ({prev_scrap:,.0f}→{curr_scrap:,.0f}, +{delta:,.0f})")
+
+            # 배송 조건 변경: 무료배송 ↔ 배송비 별도 (둘 다 값이 있을 때만)
+            prev_ship, curr_ship = prev.get("shipping_separate"), p.get("shipping_separate")
+            if prev_ship and curr_ship and prev_ship != curr_ship:
+                label = {"Y": "배송비 별도", "N": "무료배송"}
+                if not p["_status"]:
+                    p["_status"] = "배송조건변경"
+                notes.append(f"{label[prev_ship]}→{label[curr_ship]}")
+                changes.append(f"🚚 배송 조건 변경 [{platform}]: {p.get('name')} ({label[prev_ship]}→{label[curr_ship]})")
 
             p["_note"] = " / ".join(notes)
 
@@ -340,6 +424,8 @@ def get_snapshot_worksheet(spreadsheet):
 SHEET_HEADERS = [
     "날짜", "수집시각", "플랫폼", "브랜드", "카테고리", "제품명",
     "정상가", "판매가", "리뷰수", "평점", "상태", "비고", "URL",
+    # (2026-09-29 추가) 예전 행이 밀리지 않도록 반드시 맨 뒤에 붙인다 (N, O, P열)
+    "스크랩수", "배송비별도", "배송비",
 ]
 
 
@@ -363,7 +449,7 @@ def append_products_to_sheet(worksheet, company: str, by_platform: dict, today: 
         if not products:
             rows.append([
                 today, now_str, platform, company, "", "(상품 없음 - 이번 주 캡처 안 됨)",
-                "", "", "", "", "", "", "",
+                "", "", "", "", "", "", "", "", "", "",
             ])
             continue
         for p in products:
@@ -384,9 +470,59 @@ def append_products_to_sheet(worksheet, company: str, by_platform: dict, today: 
                 p.get("_status", ""),
                 note,
                 p.get("url") or "",
+                p.get("scrap_count") if p.get("scrap_count") is not None else "",
+                p.get("shipping_separate") or "",
+                p.get("shipping_fee") if p.get("shipping_fee") is not None else "",
             ])
     if rows:
         worksheet.append_rows(rows, value_input_option="USER_ENTERED")
+
+
+def _col_letter(index: int) -> str:
+    """0부터 시작하는 열 번호 → 'A', 'B', ... 'Z', 'AA' ..."""
+    letters = ""
+    index += 1
+    while index:
+        index, rem = divmod(index - 1, 26)
+        letters = chr(65 + rem) + letters
+    return letters
+
+
+def backfill_snapshot_sheet(worksheet) -> int:
+    """'스냅샷' 탭의 예전 행 중 스크랩수/배송비별도/배송비가 비어 있는 행을 '비고' 문장에서 채운다.
+    리뷰 없이 스크랩 수만 보이던 행은 리뷰수·평점을 0으로 채운다(n8n v4 규칙과 동일).
+    이미 값이 있는 칸은 절대 건드리지 않으므로 여러 번 실행해도 안전하다. 바뀐 칸 수를 돌려준다."""
+    values = worksheet.get_all_values()
+    if len(values) <= 1:
+        return 0
+    col = {name: SHEET_HEADERS.index(name) for name in
+           ("플랫폼", "제품명", "리뷰수", "평점", "비고", "스크랩수", "배송비별도", "배송비")}
+    updates = []
+
+    def cell(row, name):
+        i = col[name]
+        return str(row[i]).strip() if i < len(row) and row[i] is not None else ""
+
+    for r, row in enumerate(values[1:], start=2):
+        if not cell(row, "제품명") or cell(row, "제품명").startswith("(상품 없음"):
+            continue
+        derived = derive_extras_from_note(cell(row, "비고"))
+        wanted = {
+            "스크랩수": derived["scrap_count"],
+            "배송비별도": derived["shipping_separate"],
+            "배송비": derived["shipping_fee"],
+        }
+        if derived["scrap_count"] is not None and cell(row, "리뷰수") == "" and cell(row, "평점") == "":
+            wanted["리뷰수"] = 0
+            wanted["평점"] = 0
+        for name, val in wanted.items():
+            if val is None or val == "" or cell(row, name) != "":
+                continue
+            updates.append({"range": f"{_col_letter(col[name])}{r}", "values": [[val]]})
+
+    if updates:
+        worksheet.batch_update(updates, value_input_option="USER_ENTERED")
+    return len(updates)
 
 
 def build_company_summary_text(company: str, by_platform: dict, changes: list, sheet_url: str) -> str:
@@ -420,20 +556,30 @@ def main():
     sheet_url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/edit"
 
     spreadsheet = get_spreadsheet()
-    raw_rows = read_raw_input_rows(spreadsheet)
-    if not raw_rows:
-        print(f"[안내] '{GOOGLE_SHEET_RAW_TAB_NAME}' 탭에 처리할 데이터가 없습니다. "
-              f"캡처+OCR 결과를 먼저 붙여넣어주세요.")
-        return
 
-    grouped = group_by_company_and_platform(raw_rows)
-
+    # "스냅샷" 탭: 헤더 맞추기 + 예전 행의 스크랩수/배송비 채우기 (원본입력이 비어 있어도 실행)
     worksheet = None
     try:
         worksheet = get_snapshot_worksheet(spreadsheet)
         ensure_sheet_headers(worksheet)
     except Exception as e:
         print(f"[오류] '{GOOGLE_SHEET_TAB_NAME}' 시트 연결 실패 (시트 기록은 건너뜁니다): {e}")
+        worksheet = None
+    if worksheet is not None:
+        try:
+            filled = backfill_snapshot_sheet(worksheet)
+            if filled:
+                print(f"[안내] '{GOOGLE_SHEET_TAB_NAME}' 탭의 예전 행에서 스크랩수/배송비 등 {filled}칸을 비고로부터 채웠습니다.")
+        except Exception as e:
+            print(f"[경고] 예전 행 채우기 실패 (이번 주 기록에는 영향 없음): {e}")
+
+    raw_rows = read_raw_input_rows(spreadsheet)
+    if not raw_rows:
+        print(f"[안내] '{GOOGLE_SHEET_RAW_TAB_NAME}' 탭에 처리할 데이터가 없습니다. "
+              f"캡처를 드라이브 폴더에 올리면 n8n이 이 탭을 채웁니다.")
+        return
+
+    grouped = group_by_company_and_platform(raw_rows)
 
     # 이번 주에 데이터가 없는 회사(캡처를 안 한 회사)의 지난 스냅샷은 그대로 유지해둔다.
     new_snapshot = dict(prev_snapshot)
