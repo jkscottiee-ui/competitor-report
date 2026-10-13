@@ -4,7 +4,9 @@
 데이터를 직전 주 대비 비교(신규/가격변동/리뷰증가/판매중단 의심)한 뒤 "스냅샷" 탭에 기록하고 Slack에
 회사별 요약을 전송한다.
 
-- (2026-09-29, 최신) 스크랩수·배송비 열 추가:
+- (2026-10-14, 최신) 스냅샷 탭 기록 방식 수정: append_rows(표 자동 감지) 대신 마지막 행을 직접 세서
+  그 아래에 쓰도록 변경(지난 기록이 덮어써지거나 일부 행이 빠지던 문제 해결).
+- (2026-09-29) 스크랩수·배송비 열 추가:
   "원본입력"과 "스냅샷" 탭에 `스크랩수`, `배송비별도`(Y=고객 부담[별도·유료·착불] / N=무료배송 /
   빈칸=화면에 표시 없음), `배송비`(원, 화면에 금액이 보일 때만; 무료배송은 0) 열을 추가했다.
   "스냅샷" 탭은 예전 행이 밀리지 않도록 새 열을 맨 뒤(N~P열)에 붙인다.
@@ -475,7 +477,29 @@ def append_products_to_sheet(worksheet, company: str, by_platform: dict, today: 
                 p.get("shipping_fee") if p.get("shipping_fee") is not None else "",
             ])
     if rows:
-        worksheet.append_rows(rows, value_input_option="USER_ENTERED")
+        _append_rows_safely(worksheet, rows)
+
+
+def _append_rows_safely(worksheet, rows: list):
+    """마지막 데이터 행 바로 아래에 직접 위치를 지정해서 쓴다.
+    (2026-10-14) gspread의 append_rows는 구글 시트의 '표 자동 감지'에 의존하는데, 이 탭에서는
+    새 기록이 2행부터 써지면서 지난주 기록을 덮어쓰거나 일부 행이 사라지는 문제가 두 번 발생했다.
+    그래서 현재 데이터의 마지막 행을 직접 세고, 필요하면 시트 행을 늘린 뒤 그 아래에 쓴다."""
+    existing = worksheet.get_all_values()
+    last = len(existing)
+    while last > 0 and not any(str(c).strip() for c in existing[last - 1]):
+        last -= 1
+    start = max(last, 1) + 1  # 1행은 헤더
+    end = start + len(rows) - 1
+    if end > worksheet.row_count:
+        worksheet.add_rows(end - worksheet.row_count)
+    width = max(len(r) for r in rows)
+    rows = [list(r) + [""] * (width - len(r)) for r in rows]
+    worksheet.update(
+        range_name=f"A{start}:{_col_letter(width - 1)}{end}",
+        values=rows,
+        value_input_option="USER_ENTERED",
+    )
 
 
 def _col_letter(index: int) -> str:
